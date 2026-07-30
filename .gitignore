@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/sessions/
+data/downloads/*
+data/temp/*
+.env.local
+*.log
+data/cookies/
+.env
+.env.example

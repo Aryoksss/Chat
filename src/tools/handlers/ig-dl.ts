@@ -1,0 +1,130 @@
+// ============================================================
+// Tool: Instagram Downloader (with cookies support)
+// ============================================================
+
+import { readFile } from 'fs/promises'
+import { logger } from '../../system/logger.js'
+import { config } from '../../system/config.js'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { existsSync } from 'fs'
+
+interface IgArgs {
+  url: string
+}
+
+/** Load cookies from file for authenticated requests */
+async function loadCookies(): Promise<string | null> {
+  const cookieFile = join(config.COOKIES_DIR || 'data/cookies', 'instagram-cookies.txt')
+  if (!existsSync(cookieFile)) return null
+  try {
+    const text = await readFile(cookieFile, 'utf-8')
+    // Strip comments and blank lines, keep only valid cookie lines
+    const lines = text.split('\n').filter(l => l.trim() && !l.startsWith('#') && !l.startsWith('//'))
+    // Parse Netscape format: domain TRUE path secure expiry name value
+    const cookieStr = lines.map(l => {
+      const parts = l.trim().split('\t')
+      if (parts.length >= 7) {
+        return `${parts[5]}=${parts[6]}`
+      }
+      return null
+    }).filter(Boolean).join('; ')
+    return cookieStr || null
+  } catch {
+    return null
+  }
+}
+
+export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: string; caption?: string; error?: string }> {
+  const { url } = args
+
+  if (!url || !url.includes('instagram.com')) {
+    return { success: false, text: 'Kasih link Instagram yang valid kak!' }
+  }
+
+  try {
+    // Build headers with cookies if available
+    const headers: Record<string, string> = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    }
+    const cookies = await loadCookies()
+    if (cookies) {
+      headers['Cookie'] = cookies
+      logger.info('Using Instagram cookies from file')
+    } else {
+      logger.warn('No Instagram cookies found — public API only')
+    }
+
+    // Try public Instagram downloader API first
+    const apiUrl = `https://api.egojs.com/api/download/instagram?url=${encodeURIComponent(url)}`
+    const response = await fetch(apiUrl, { headers })
+    const data = await response.json() as any
+
+    if (data?.result?.media?.[0]) {
+      const media = data.result.media[0]
+      const mediaUrl = media.url || media.download_url
+
+      if (mediaUrl) {
+        const mediaResp = await fetch(mediaUrl, { headers })
+        const buffer = Buffer.from(await mediaResp.arrayBuffer())
+        const ext = mediaUrl.includes('.mp4') ? 'mp4' : 'jpg'
+        const outPath = join(tmpdir(), `ig_${Date.now()}.${ext}`)
+        const { writeFile } = await import('fs/promises')
+        await writeFile(outPath, buffer)
+
+        return {
+          success: true,
+          text: '📸 Instagram media berhasil didownload!',
+          filePath: outPath,
+          fileType: ext === 'mp4' ? 'video' : 'image',
+          caption: data.result.caption?.slice(0, 200) || '',
+        }
+      }
+    }
+
+    // Fallback: try direct scraping with cookies
+    if (cookies) {
+      try {
+        const igResp = await fetch(`https://www.instagram.com/p/${extractCode(url)}/?__a=1&__d=1`, {
+          headers: {
+            ...headers,
+            'Accept': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+          }
+        })
+        const igData = await igResp.json() as any
+        const items = igData?.items?.[0] || igData?.graphql?.shortcode_media
+        if (items) {
+          const mediaUrl = items.video_versions?.[0]?.url || items.display_url
+          if (mediaUrl) {
+            const mediaResp = await fetch(mediaUrl, { headers })
+            const buffer = Buffer.from(await mediaResp.arrayBuffer())
+            const ext = items.video_versions ? 'mp4' : 'jpg'
+            const outPath = join(tmpdir(), `ig_${Date.now()}.${ext}`)
+            const { writeFile } = await import('fs/promises')
+            await writeFile(outPath, buffer)
+            return {
+              success: true,
+              text: '📸 Instagram media berhasil didownload!',
+              filePath: outPath,
+              fileType: ext === 'mp4' ? 'video' : 'image',
+            }
+          }
+        }
+      } catch (scrapeErr) {
+        logger.warn({ scrapeErr }, 'Direct IG scrape failed')
+      }
+    }
+
+    return { success: false, text: 'Gagal dapetin media dari link itu. Mungkin link-nya private, udah dihapus, atau cookies-nya expired.' }
+  } catch (err: any) {
+    logger.error({ err }, 'ig-dl failed')
+    return { success: false, error: `Gagal download Instagram: ${err.message}` }
+  }
+}
+
+/** Extract shortcode from Instagram URL */
+function extractCode(url: string): string {
+  const match = url.match(/(?:p|reel|tv)\/([^/?]+)/)
+  return match?.[1] || ''
+}
