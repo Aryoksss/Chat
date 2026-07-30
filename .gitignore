@@ -3,9 +3,7 @@ dist/
 data/sessions/
 data/downloads/*
 data/temp/*
-.env.local
-*.log
 data/cookies/
 .env
-.env.example
-.env
+.env.local
+*.log
