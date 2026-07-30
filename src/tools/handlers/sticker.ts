@@ -17,7 +17,7 @@ interface StickerArgs {
 }
 
 const AUTHOR = 'yoks'
-const PACK = 'Sticker by yoks'
+const PACK = '🕷'
 
 export async function handleSticker(args: StickerArgs, context: any): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: string; error?: string }> {
   try {

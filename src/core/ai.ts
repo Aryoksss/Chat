@@ -1,7 +1,7 @@
 // ============================================================
 // AI Bridge — 9router (OpenAI-compatible API)
 // ============================================================
-// Handles: chat completion, tool calling loop, error handling
+// Handles: chat completion, tool calling loop, retry + error handling
 
 import { config } from '../system/config.js'
 import { logger } from '../system/logger.js'
@@ -18,15 +18,35 @@ interface ChatResponse {
   toolCalls: AIToolCall[]
 }
 
+// Retry config
+const MAX_RETRIES = 3
+const BASE_DELAY_MS = 1000
+const RETRYABLE_STATUSES = [429, 500, 502, 503, 504]
+
 export class AIBridge {
   private baseUrl: string
   private apiKey: string
   private defaultModel: string
+  private fallbackModel: string
 
   constructor() {
     this.baseUrl = config.NINE_ROUTER_BASE_URL
     this.apiKey = config.NINE_ROUTER_API_KEY
     this.defaultModel = config.AI_MODEL
+    this.fallbackModel = config.AI_FALLBACK_MODEL || 'gpt-4o-mini'
+  }
+
+  /** Sleep helper for delay */
+  private sleep(ms: number): Promise<void> {
+    return new Promise(r => setTimeout(r, ms))
+  }
+
+  /** Check if error is retryable */
+  private isRetryable(err: any): boolean {
+    if (err?.status && RETRYABLE_STATUSES.includes(err.status)) return true
+    if (err?.message?.includes('timeout') || err?.message?.includes('ETIMEDOUT') || err?.message?.includes('ECONNRESET')) return true
+    if (err?.type === 'rate_limit') return true
+    return false
   }
 
   /** Build system prompt from persona files + memory */
@@ -54,10 +74,11 @@ export class AIBridge {
     return prompt
   }
 
-  /** Send chat to 9router + handle tool calling loop */
+  /** Send chat to 9router with RETRY + EXPONENTIAL BACKOFF */
   async chat(options: ChatOptions): Promise<ChatResponse> {
     const { messages, tools, model } = options
     const selectedModel = model || this.defaultModel
+    let lastError: Error | null = null
 
     const body: Record<string, any> = {
       model: selectedModel,
@@ -79,55 +100,105 @@ export class AIBridge {
       body.tool_choice = 'auto'
     }
 
-    try {
-      logger.info({ model: selectedModel, toolsCount: tools?.length ?? 0 }, 'AI: sending chat')
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        logger.info({ model: selectedModel, toolsCount: tools?.length ?? 0, attempt }, 'AI: sending chat')
 
-      const response = await fetch(`${this.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`,
-        },
-        body: JSON.stringify(body),
-      })
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 30000) // 30s timeout
 
-      if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(`9router API error ${response.status}: ${errorText}`)
-      }
-
-      const data = await response.json()
-      const choice = data.choices?.[0]
-      const message = choice?.message
-
-      if (!message) {
-        throw new Error('No response from AI')
-      }
-
-      const result: ChatResponse = {
-        content: message.content || null,
-        toolCalls: [],
-      }
-
-      // Parse tool calls if any
-      if (message.tool_calls) {
-        result.toolCalls = message.tool_calls.map((tc: any) => ({
-          id: tc.id,
-          type: 'function',
-          function: {
-            name: tc.function.name,
-            arguments: tc.function.arguments,
+        const response = await fetch(`${this.baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.apiKey}`,
           },
-        }))
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        })
+
+        clearTimeout(timeout)
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          const err = new Error(`9router API error ${response.status}: ${errorText}`)
+          ;(err as any).status = response.status
+
+          if (attempt < MAX_RETRIES && this.isRetryable(err)) {
+            const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1) + Math.random() * 500
+            logger.warn({ status: response.status, attempt, delayMs: Math.round(delay) }, 'AI: retrying after error')
+            await this.sleep(delay)
+            lastError = err
+            continue
+          }
+
+          // Fallback model on 5xx or rate limit
+          if (selectedModel !== this.fallbackModel && (response.status >= 500 || response.status === 429)) {
+            logger.warn({ fallbackModel: this.fallbackModel }, 'AI: falling back to backup model')
+            body.model = this.fallbackModel
+            attempt-- // Don't burn retry on fallback switch
+            continue
+          }
+
+          throw err
+        }
+
+        const data = await response.json()
+        const choice = data.choices?.[0]
+        const message = choice?.message
+
+        if (!message) {
+          throw new Error('No response from AI')
+        }
+
+        const result: ChatResponse = {
+          content: message.content || null,
+          toolCalls: [],
+        }
+
+        // Parse tool calls if any
+        if (message.tool_calls) {
+          result.toolCalls = message.tool_calls.map((tc: any) => ({
+            id: tc.id,
+            type: 'function',
+            function: {
+              name: tc.function.name,
+              arguments: tc.function.arguments,
+            },
+          }))
+        }
+
+        logger.info({ hasContent: !!result.content, toolCallsCount: result.toolCalls.length, attempt }, 'AI: response received')
+        return result
+
+      } catch (err: any) {
+        if (err.name === 'AbortError') {
+          err.message = 'AI request timed out after 30s'
+          ;(err as any).status = 408
+        }
+
+        if (attempt < MAX_RETRIES && this.isRetryable(err)) {
+          const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1) + Math.random() * 500
+          logger.warn({ err: err.message, attempt, delayMs: Math.round(delay) }, 'AI: retrying')
+          await this.sleep(delay)
+          lastError = err
+          continue
+        }
+
+        // Fallback model if primary failed and we haven't tried fallback yet
+        if (selectedModel !== this.fallbackModel) {
+          logger.warn({ fallbackModel: this.fallbackModel }, 'AI: falling back to backup model')
+          body.model = this.fallbackModel
+          attempt-- // Don't burn retry
+          continue
+        }
+
+        logger.error({ err, attempt }, 'AI: all retries exhausted')
+        throw lastError || err
       }
-
-      logger.info({ hasContent: !!result.content, toolCallsCount: result.toolCalls.length }, 'AI: response received')
-      return result
-
-    } catch (err) {
-      logger.error({ err }, 'AI: request failed')
-      throw err
     }
+
+    throw lastError || new Error('AI: all retries exhausted')
   }
 
   /** Full tool calling loop — calls AI, executes tools, returns final response */
@@ -147,7 +218,12 @@ export class AIBridge {
     const maxTurns = 8 // Safety limit for tool calling loop
 
     for (let turn = 0; turn < maxTurns; turn++) {
-      const response = await this.chat({ messages, tools, model })
+      let response: ChatResponse
+      try {
+        response = await this.chat({ messages, tools, model })
+      } catch (err: any) {
+        return `Maaf, ada gangguan teknis: ${err.message}`
+      }
 
       // If AI responds with text, accumulate it
       if (response.content) {

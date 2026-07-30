@@ -62,6 +62,13 @@ export interface AIToolCall {
   }
 }
 
+/** Short-term memory entry — Nyimpes konteks percakapan terakhir */
+export interface ShortMemoryEntry {
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: number
+}
+
 /** Parsed incoming message from Baileys */
 export interface IncomingMessage {
   jid: string              // Chat identifier
@@ -72,5 +79,7 @@ export interface IncomingMessage {
   quotedText?: string      // Text from replied-to message
   isGroup: boolean
   participant?: string     // Group participant number
+  isBotMentioned: boolean  // Whether bot @mention in group message
+  isReplyToBot: boolean    // Whether replying to bot's message
   raw: any                 // Original Baileys message object
 }

@@ -1,5 +1,6 @@
 // ============================================================
 // Message Handler — main pipeline: WA → AI → response
+// With Message Queue + Rate Limiter (Anti-Spam)
 // ============================================================
 
 import { config } from '../system/config.js'
@@ -9,100 +10,201 @@ import { aiBridge } from '../core/ai.js'
 import { memoryManager } from '../memory/manager.js'
 import { cmdHandler } from '../system/cmd-handler.js'
 import { toolExecutor } from '../tools/executor.js'
-import type { IncomingMessage, PersonaConfig, PersonaType } from '../core/types.js'
+import type { IncomingMessage, PersonaConfig } from '../core/types.js'
 import type { WhatsAppClient } from '../core/client.js'
+
+// ---- Rate Limiter Config ----
+const RATE_LIMIT_WINDOW_MS = 10_000       // 10 detik
+const RATE_LIMIT_MAX_MSG = 5               // max 5 pesan per window
+const RATE_LIMIT_MUTE_MS = 30_000          // mute 30 detik kalau kena limit
+const QUEUE_INTERVAL_MS = 1_500            // jeda antar proses pesan (1.5s)
+
+// ---- Queue Item ----
+interface QueueItem {
+  msg: IncomingMessage
+  client: WhatsAppClient
+  timestamp: number
+}
+
+// ---- Per-JID state ----
+interface JidState {
+  queue: QueueItem[]
+  timestamps: number[]
+  mutedUntil: number
+  processing: boolean
+}
 
 export class MessageHandler {
   private personas = new Map<'owner' | 'group', PersonaConfig>()
+  private jidStates = new Map<string, JidState>()
 
-  /** Set current persona configs (called after load/reload) */
   setPersonas(personas: Map<'owner' | 'group', PersonaConfig>): void {
     this.personas = personas
     logger.info('Personas updated in message handler')
   }
 
-  /** Get current persona map */
   getPersonas(): Map<'owner' | 'group', PersonaConfig> {
     return this.personas
   }
 
-  /** Handle one incoming message — the main pipeline */
+  /** Get or create state for a JID */
+  private getJidState(jid: string): JidState {
+    let state = this.jidStates.get(jid)
+    if (!state) {
+      state = { queue: [], timestamps: [], mutedUntil: 0, processing: false }
+      this.jidStates.set(jid, state)
+    }
+    return state
+  }
+
+  /** Rate limiter — cek apakah user kena spam limit */
+  private isRateLimited(jid: string): { limited: boolean; reason?: string } {
+    const state = this.getJidState(jid)
+    const now = Date.now()
+
+    // Cek mute
+    if (state.mutedUntil > now) {
+      const remaining = Math.ceil((state.mutedUntil - now) / 1000)
+      return { limited: true, reason: `Spam detection: mute ${remaining}s` }
+    }
+
+    // Bersihin timestamp expired
+    state.timestamps = state.timestamps.filter(t => now - t < RATE_LIMIT_WINDOW_MS)
+
+    // Cek jumlah pesan dalam window
+    if (state.timestamps.length >= RATE_LIMIT_MAX_MSG) {
+      state.mutedUntil = now + RATE_LIMIT_MUTE_MS
+      logger.warn({ jid, msgCount: state.timestamps.length }, 'Rate limit triggered — muting')
+      return { limited: true, reason: `Slow down! Muted ${RATE_LIMIT_MUTE_MS / 1000}s` }
+    }
+
+    return { limited: false }
+  }
+
+  /** Push pesan ke queue per-JID */
+  private enqueue(msg: IncomingMessage, client: WhatsAppClient): void {
+    const state = this.getJidState(msg.jid)
+    state.queue.push({ msg, client, timestamp: Date.now() })
+
+    if (!state.processing) {
+      state.processing = true
+      this.processQueue(msg.jid)
+    }
+  }
+
+  /** Process queue untuk satu JID — satu per satu dengan jeda */
+  private async processQueue(jid: string): Promise<void> {
+    const state = this.getJidState(jid)
+
+    while (state.queue.length > 0) {
+      const item = state.queue.shift()!
+      try {
+        await this.processMessage(item.msg, item.client)
+      } catch (err: any) {
+        logger.error({ err, jid }, 'Queue processing error')
+      }
+
+      // Jeda antar pesan biar gak kelihatan spam
+      if (state.queue.length > 0) {
+        await this.sleep(QUEUE_INTERVAL_MS)
+      }
+    }
+
+    state.processing = false
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(r => setTimeout(r, ms))
+  }
+
+  /** Public entry — called from client.ts */
   async handle(msg: IncomingMessage, client: WhatsAppClient): Promise<void> {
-    // 1. Route the message
+    // 1. Route dulu
     const personaType = router.route(msg.jid, msg.sender, msg.isGroup)
-    if (!personaType) return // Ignore unknown chats
+    if (!personaType) return
 
-    logger.info({ persona: personaType, text: msg.text.slice(0, 50) }, 'Incoming message')
+    // 2. Rate limit check
+    const { limited, reason } = this.isRateLimited(msg.jid)
+    if (limited && personaType !== 'owner') {
+      logger.warn({ jid: msg.jid, reason }, 'Message rate limited')
+      if (msg.text) {
+        // Kasih tau user kalau kena limit
+        await client.sendText(msg.jid, `⏱ ${reason}`)
+      }
+      return
+    }
 
-    // 2. Check for system command (owner only)
+    // 3. Catat timestamp buat rate limiter
+    const state = this.getJidState(msg.jid)
+    state.timestamps.push(Date.now())
+
+    // 4. Queue pesannya (diproses urut)
+    this.enqueue(msg, client)
+  }
+
+  /** Proses satu pesan — queue worker */
+  private async processMessage(msg: IncomingMessage, client: WhatsAppClient): Promise<void> {
+    const personaType = router.route(msg.jid, msg.sender, msg.isGroup)!
+    const logPrefix = `[${personaType}] ${msg.sender}`
+
+    logger.info({ persona: personaType, text: msg.text?.slice(0, 60) }, `${logPrefix} processing`)
+
+    // System command (owner only)
     if (personaType === 'owner' && msg.text.startsWith('/')) {
       const handled = await cmdHandler.handle(msg, client)
       if (handled) return
-      // If not a recognized command, continue to AI
     }
 
-    // 3. Check for prefix command (.st, .yt, .ig etc) — fallback direct execution
-    if (msg.text.startsWith(config.PREFIX)) {
+    // Prefix command fallback (.st, .yt, dll)
+    if (msg.text?.startsWith(config.PREFIX)) {
       const handled = await this.handlePrefixCommand(msg, client)
       if (handled) return
     }
 
-    // 4. Get persona config
+    // Ambil persona config
     const persona = this.personas.get(personaType)
     if (!persona) {
-      logger.warn({ personaType }, 'No persona config found')
+      logger.warn({ personaType }, 'No persona config')
       return
     }
 
-    // 5. Load memory
+    // Load memory
     const memory = await memoryManager.getContent()
 
-    // 6. Build system prompt
+    // Build system prompt
     const systemPrompt = aiBridge.buildSystemPrompt(persona.agent, persona.soul, memory)
 
-    // 7. Prepare user message text
-    let userText = msg.text
+    // Prepare user text
+    let userText = msg.text || ''
     if (msg.quotedText) {
-      userText = `${msg.text}\n\n(Membalas pesan: "${msg.quotedText}")`
+      userText = `${msg.text}\n\n(Membalas: "${msg.quotedText}")`
     }
 
-    // 8. Send typing indicator (reaction)
-    await client.react(msg.jid, msg.raw.key, '🤔')
+    // React 🤔 processing
+    try { await client.react(msg.jid, msg.raw.key, '🤔') } catch {}
 
-    // 9. Call AI with tool calling loop
+    // AI call
     try {
-      // Create context for tool handlers
-      const toolContext = {
-        sock: client.sock,
-        jid: msg.jid,
-        participant: msg.participant,
-      }
-
-      // Wrap tool handlers with context
+      const toolContext = { sock: client.sock, jid: msg.jid, participant: msg.participant }
       const handlerMap = toolExecutor.createHandlerMap(toolContext)
 
       const response = await aiBridge.chatWithTools(
-        systemPrompt,
-        userText,
-        persona.tools,
-        handlerMap,
+        systemPrompt, userText, persona.tools, handlerMap,
       )
 
-      // 10. Send response back to WhatsApp
-      if (response && response.trim()) {
+      if (response?.trim()) {
         await client.sendText(msg.jid, response)
 
-        // 11. Save to memory
-        await memoryManager.append(
-          `${msg.sender}: ${msg.text.slice(0, 100)}\nBot: ${response.slice(0, 100)}`
-        )
+        // Save ke memory (ringkasan)
+        if (msg.text) {
+          await memoryManager.append(
+            `${msg.sender}: ${msg.text.slice(0, 120)}\nBot: ${response.slice(0, 120)}`
+          )
+        }
       }
     } catch (err: any) {
       logger.error({ err }, 'AI processing failed')
-      await client.sendText(
-        msg.jid,
-        `Maaf, ada error: ${err.message || 'gagal proses pesan'}`
-      )
+      await client.sendText(msg.jid, `Maaf, error: ${err.message || 'gagal proses'}`)
     }
   }
 
@@ -120,32 +222,19 @@ export class MessageHandler {
     const toolName = PREFIX_MAP[command]
     if (!toolName) return false
 
-    // Check if tool exists
-    if (!toolExecutor.executeToolCall(toolName, {}, {
-      sock: client.sock,
-      jid: msg.jid,
-      participant: msg.participant,
-    })) return false
-
-    // Execute
     const toolContext = {
       sock: client.sock,
       jid: msg.jid,
       participant: msg.participant,
     }
 
-    // Parse args
     const parsedArgs = this.parseCommandArgs(command, args, msg)
 
     logger.info({ command, toolName, args: parsedArgs }, 'Prefix command executed')
 
     try {
       const result = await toolExecutor.executeToolCall(toolName, parsedArgs, toolContext)
-
-      // If tool sent a file (sticker, download), don't send text
-      if (!result.startsWith('✅') && !result.startsWith('❌')) {
-        // Result is probably already handled by tool
-      } else {
+      if (result.startsWith('✅') || result.startsWith('❌')) {
         await client.sendText(msg.jid, result)
       }
     } catch (err: any) {
@@ -155,92 +244,35 @@ export class MessageHandler {
     return true
   }
 
-  /** Parse command arguments based on command type */
-  private parseCommandArgs(
-    command: string,
-    args: string[],
-    msg: IncomingMessage
-  ): Record<string, unknown> {
+  private parseCommandArgs(command: string, args: string[], msg: IncomingMessage): Record<string, unknown> {
     const parsed: Record<string, unknown> = {}
-
     switch (command) {
-      case 'st':
-      case 'sticker':
-        // Sticker: reply gambar atau kirim gambar
-        parsed.imageType = 'reply'
-        break
-
-      case 'yt':
-      case 'youtube':
-        parsed.url = args[0] || ''
-        parsed.format = args.includes('--audio') || args.includes('-a') ? 'audio' : 'video'
-        break
-
-      case 'ig':
-      case 'instagram':
-        parsed.url = args[0] || ''
-        break
-
-      case 'tt':
-      case 'tiktok':
-        parsed.url = args[0] || ''
-        break
-
-      case 'tw':
-      case 'twitter':
-        parsed.url = args[0] || ''
-        break
-
-      case 'brainly':
-        parsed.query = args.join(' ')
-        break
-
-      case 'qr':
-        parsed.text = args.join(' ')
-        break
-
-      case 'translate':
-      case 'tr':
-        parsed.text = args.slice(1).join(' ')
-        parsed.to = args[0] || 'id'
-        break
-
-      case 'shortlink':
-      case 'short':
-        parsed.url = args[0] || ''
-        break
-
-      case 'weather':
-        parsed.city = args.join(' ')
-        break
+      case 's': case 'st': case 'sticker': parsed.imageType = 'reply'; break
+      case 'yt': case 'youtube': parsed.url = args[0] || ''; parsed.format = args.includes('--audio') || args.includes('-a') ? 'audio' : 'video'; break
+      case 'ig': case 'instagram': parsed.url = args[0] || ''; break
+      case 'tt': case 'tiktok': parsed.url = args[0] || ''; break
+      case 'tw': case 'twitter': parsed.url = args[0] || ''; break
+      case 'brainly': parsed.query = args.join(' '); break
+      case 'qr': parsed.text = args.join(' '); break
+      case 'translate': case 'tr': parsed.text = args.slice(1).join(' '); parsed.to = args[0] || 'id'; break
+      case 'shortlink': case 'short': parsed.url = args[0] || ''; break
+      case 'weather': parsed.city = args.join(' '); break
     }
-
     return parsed
   }
 }
 
-/** Map command prefix to internal tool name */
 const PREFIX_MAP: Record<string, string> = {
-  'st': 'sticker',
-  'sticker': 'sticker',
-  'yt': 'yt-dl',
-  'youtube': 'yt-dl',
-  'ig': 'ig-dl',
-  'instagram': 'ig-dl',
-  'tt': 'tt-dl',
-  'tiktok': 'tt-dl',
-  'tw': 'tw-dl',
-  'twitter': 'tw-dl',
-  'brainly': 'brainly',
-  'qr': 'qr',
-  'translate': 'translate',
-  'tr': 'translate',
-  'shortlink': 'shortlink',
-  'short': 'shortlink',
-  'weather': 'weather',
-  'anime': 'anime',
-  'to-pdf': 'to-pdf',
-  'pdf': 'to-pdf',
+  'st': 'sticker', 'sticker': 'sticker',
+  'yt': 'yt-dl', 'youtube': 'yt-dl',
+  'ig': 'ig-dl', 'instagram': 'ig-dl',
+  'tt': 'tt-dl', 'tiktok': 'tt-dl',
+  'tw': 'tw-dl', 'twitter': 'tw-dl',
+  'brainly': 'brainly', 'qr': 'qr',
+  'translate': 'translate', 'tr': 'translate',
+  'shortlink': 'shortlink', 'short': 'shortlink',
+  'weather': 'weather', 'anime': 'anime',
+  'to-pdf': 'to-pdf', 'pdf': 'to-pdf',
 }
 
 export const messageHandler = new MessageHandler()
