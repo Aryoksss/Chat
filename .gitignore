@@ -8,3 +8,4 @@ data/temp/*
 data/cookies/
 .env
 .env.example
+.env
