@@ -6,9 +6,7 @@ import { readFile, readdir } from 'fs/promises'
 import path from 'path'
 import { config } from '../system/config.js'
 import { logger } from '../system/logger.js'
-import { toolsRegistry } from '../tools/registry.js'
-import type { PersonaConfig } from './types.js'
-import type { ToolDef } from '../core/types.js'
+import type { ToolDef, PersonaConfig } from '../core/types.js'
 
 export class PersonaLoader {
   /** Load all personas from the personas directory */
@@ -40,23 +38,11 @@ export class PersonaLoader {
 
     const tools = toolsMd ? this.parseToolsMD(toolsMd) : []
 
-    // Register tools with registry so handlers can be found
-    const toolHandlers = new Map<string, (args: Record<string, unknown>) => Promise<string>>()
-    for (const tool of tools) {
-      const handler = toolsRegistry.getHandler(tool.name)
-      if (handler) {
-        toolHandlers.set(tool.name, handler)
-      } else {
-        logger.warn({ tool: tool.name, persona: name }, 'No handler registered for tool')
-      }
-    }
-
     return {
       name,
       agent: agent || `Anda adalah asisten WhatsApp untuk ${name}.`,
       soul: soul || 'Bersikaplah ramah dan membantu.',
       tools,
-      toolHandlers,
     }
   }
 

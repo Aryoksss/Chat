@@ -6,7 +6,7 @@
 export type PersonaType = 'owner' | 'group'
 
 /** Detected message content type */
-export type MessageContentType = 'text' | 'image' | 'video' | 'sticker' | 'document' | 'voice'
+export type MessageContentType = 'text' | 'image' | 'video' | 'sticker' | 'document' | 'audio'
 
 /** Tool definition parsed from TOOLS.md — maps to OpenAI function-calling */
 export interface ToolDef {
@@ -24,6 +24,7 @@ export interface ToolContext {
   jid: string              // Chat JID (sender or group)
   participant?: string     // Participant who sent message (null in DM)
   downloadMedia?: (msg: any) => Promise<Buffer | null>
+  rawMessage?: any         // Raw Baileys message object
 }
 
 /** Result from a tool execution */
@@ -47,7 +48,7 @@ export interface PersonaConfig {
 /** AI conversation message */
 export interface AIMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
-  content: string
+  content: string | Array<{ type: 'text' | 'image_url', text?: string, image_url?: { url: string } }>
   tool_call_id?: string
   tool_calls?: AIToolCall[]
 }

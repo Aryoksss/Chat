@@ -18,13 +18,15 @@ export class Router {
       // Kalau GROUP_JID dikosongkan, respon di semua grup
       if (!config.GROUP_JID) return 'group'
 
-      // Cocokkan dengan grup yang ditentukan
+      // Cocokkan dengan grup yang ditentukan (misal 1234-5678@g.us)
       if (jid === config.GROUP_JID) return 'group'
 
-      // Wildcard: kalau GROUP_JID pake pattern
-      if (config.GROUP_JID.endsWith('@g.us') && jid.endsWith('@g.us')) {
-        return 'group'
-      }
+      // Jika GROUP_JID menggunakan pola koma untuk banyak grup (opsional jika nanti support multi)
+      const allowedGroups = config.GROUP_JID.split(',').map(g => g.trim())
+      if (allowedGroups.includes(jid)) return 'group'
+
+      // Kalau kita sampai sini, jid grup tidak cocok dengan allowlist. Jangan respon.
+      return null
     }
 
     // Unknown — ignore

@@ -12,7 +12,7 @@ interface QrArgs {
   text: string
 }
 
-export async function handleQrGenerate(args: QrArgs): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: string; error?: string }> {
+export async function handleQrGenerate(args: QrArgs): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: 'image' | 'video' | 'sticker' | 'audio' | 'document'; error?: string }> {
   const { text } = args
 
   if (!text || text.trim().length === 0) {

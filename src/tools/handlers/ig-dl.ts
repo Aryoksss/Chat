@@ -35,7 +35,7 @@ async function loadCookies(): Promise<string | null> {
   }
 }
 
-export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: string; caption?: string; error?: string }> {
+export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: 'image' | 'video' | 'sticker' | 'audio' | 'document'; caption?: string; error?: string }> {
   const { url } = args
 
   if (!url || !url.includes('instagram.com')) {

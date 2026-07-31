@@ -10,6 +10,10 @@ import { aiBridge } from '../core/ai.js'
 import { memoryManager } from '../memory/manager.js'
 import { cmdHandler } from '../system/cmd-handler.js'
 import { toolExecutor } from '../tools/executor.js'
+import { audioManager } from '../audio/manager.js'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { writeFile } from 'fs/promises'
 import type { IncomingMessage, PersonaConfig } from '../core/types.js'
 import type { WhatsAppClient } from '../core/client.js'
 
@@ -119,9 +123,15 @@ export class MessageHandler {
 
   /** Public entry — called from client.ts */
   async handle(msg: IncomingMessage, client: WhatsAppClient): Promise<void> {
+    // Debug log before routing
+    logger.info({ sender: msg.sender, ownerEnv: config.OWNER_NUMBER }, 'DEBUG: Entering router')
+
     // 1. Route dulu
     const personaType = router.route(msg.jid, msg.sender, msg.isGroup)
-    if (!personaType) return
+    if (!personaType) {
+      logger.info('DEBUG: Router returned null (ignored message)')
+      return
+    }
 
     // 2. Rate limit check
     const { limited, reason } = this.isRateLimited(msg.jid)
@@ -149,6 +159,12 @@ export class MessageHandler {
 
     logger.info({ persona: personaType, text: msg.text?.slice(0, 60) }, `${logPrefix} processing`)
 
+    // Quick local menu command before routing to AI/persona flow
+    if (msg.text === '.menu' || msg.text === '.help' || msg.text === '.commands' || msg.text === '/menu') {
+      const handled = await cmdHandler.handle({ ...msg, text: '/menu' }, client)
+      if (handled) return
+    }
+
     // System command (owner only)
     if (personaType === 'owner' && msg.text.startsWith('/')) {
       const handled = await cmdHandler.handle(msg, client)
@@ -174,25 +190,85 @@ export class MessageHandler {
     // Build system prompt
     const systemPrompt = aiBridge.buildSystemPrompt(persona.agent, persona.soul, memory)
 
-    // Prepare user text
-    let userText = msg.text || ''
+    // Prepare user text or multi-modal content
+    let userContent: any = msg.text || ''
     if (msg.quotedText) {
-      userText = `${msg.text}\n\n(Membalas: "${msg.quotedText}")`
+      userContent = `${msg.text}\n\n(Membalas: "${msg.quotedText}")`
     }
 
-    // React 🤔 processing
-    try { await client.react(msg.jid, msg.raw.key, '🤔') } catch {}
+    // If message is an image, process it for Vision AI
+    if (msg.messageType === 'image') {
+      try {
+        const buffer = await client.downloadMedia(msg.raw)
+        if (buffer) {
+          const base64 = buffer.toString('base64')
+          const mimeType = 'image/jpeg'
+          userContent = [
+            { type: 'text', text: msg.text ? `${msg.text}\n\n[Terdapat lampiran gambar]` : '[User mengirimkan gambar]' },
+            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } }
+          ]
+        }
+      } catch (err) {
+        logger.error('Failed to process image for Vision')
+      }
+    }
 
-    // AI call
+    // If message is an audio/voice note, transcribe it
+    if (msg.messageType === 'audio') {
+      try {
+        const buffer = await client.downloadMedia(msg.raw)
+        if (buffer) {
+          const transcript = await audioManager.transcribe(buffer)
+          if (transcript) {
+            userContent = `[Voice Note dari User]: "${transcript}"\n\n(Catatan untuk AI: User berbicara menggunakan Voice Note. Kamu bisa merespons santai seolah ini percakapan suara!)`
+          } else {
+            userContent = `[User mengirimkan Voice Note tetapi transkripsi gagal/belum disetting]`
+          }
+        }
+      } catch (err) {
+        logger.error('Failed to process audio for STT')
+      }
+    }
+
+    // AI call (no react/presence — they cause "Waiting for this message" on some clients)
     try {
-      const toolContext = { sock: client.sock, jid: msg.jid, participant: msg.participant }
+      const toolContext = {
+        sock: client.sock,
+        jid: msg.jid,
+        participant: msg.participant,
+        downloadMedia: async (m: any) => client.downloadMedia(m),
+        rawMessage: msg.raw // Allow tools (like sticker maker) to access the raw message directly
+      }
       const handlerMap = toolExecutor.createHandlerMap(toolContext)
 
       const response = await aiBridge.chatWithTools(
-        systemPrompt, userText, persona.tools, handlerMap,
+        systemPrompt, userContent, persona.tools, handlerMap,
       )
 
+      // Debug log dulu sebelum dikirim
+      logger.info({ response }, 'RESPONSE-before-send')
+
       if (response?.trim()) {
+        // Generate Hu Tao Voice Note if user sent an audio message
+        if (msg.messageType === 'audio') {
+          try {
+            await client.sendPresence(msg.jid, 'recording')
+            const voiceBuffer = await audioManager.generateHuTaoVoice(response)
+
+            if (voiceBuffer) {
+              const outPath = join(tmpdir(), `hutao_vn_${Date.now()}.ogg`)
+              await writeFile(outPath, voiceBuffer)
+              await client.sendFile(msg.jid, outPath, 'audio')
+              // Return after sending VN to avoid double sending (text + VN).
+              // Alternatively, remove return to send both. We'll only send VN here.
+              return
+            }
+          } catch (err) {
+            logger.error({ err }, 'Failed to send VN response, falling back to text')
+          }
+        }
+
+        // Send standard text if not a Voice Note or if Voice Note generation failed
         await client.sendText(msg.jid, response)
 
         // Save ke memory (ringkasan)
@@ -226,6 +302,7 @@ export class MessageHandler {
       sock: client.sock,
       jid: msg.jid,
       participant: msg.participant,
+      downloadMedia: async (m: any) => client.downloadMedia(m)
     }
 
     const parsedArgs = this.parseCommandArgs(command, args, msg)

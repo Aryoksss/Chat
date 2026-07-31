@@ -31,7 +31,7 @@ async function loadCookies(): Promise<string | null> {
   }
 }
 
-export async function handleTwDownload(args: TwArgs): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: string; error?: string }> {
+export async function handleTwDownload(args: TwArgs): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: 'image' | 'video' | 'sticker' | 'audio' | 'document'; error?: string }> {
   const { url } = args
 
   if (!url || !url.includes('twitter.com') && !url.includes('x.com')) {

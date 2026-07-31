@@ -33,7 +33,7 @@ export class AIBridge {
     this.baseUrl = config.NINE_ROUTER_BASE_URL
     this.apiKey = config.NINE_ROUTER_API_KEY
     this.defaultModel = config.AI_MODEL
-    this.fallbackModel = config.AI_FALLBACK_MODEL || 'gpt-4o-mini'
+    this.fallbackModel = config.AI_FALLBACK_MODEL || this.defaultModel
   }
 
   /** Sleep helper for delay */
@@ -133,7 +133,7 @@ export class AIBridge {
           }
 
           // Fallback model on 5xx or rate limit
-          if (selectedModel !== this.fallbackModel && (response.status >= 500 || response.status === 429)) {
+          if (body.model !== this.fallbackModel && (response.status >= 500 || response.status === 429)) {
             logger.warn({ fallbackModel: this.fallbackModel }, 'AI: falling back to backup model')
             body.model = this.fallbackModel
             attempt-- // Don't burn retry on fallback switch
@@ -143,33 +143,64 @@ export class AIBridge {
           throw err
         }
 
-        const data = await response.json()
-        const choice = data.choices?.[0]
-        const message = choice?.message
+      // Read response body as text FIRST (body can only be consumed once)
+      const responseText = await response.text()
+      let data: any
 
-        if (!message) {
-          throw new Error('No response from AI')
+      try {
+        data = JSON.parse(responseText)
+      } catch (parseErr: any) {
+        // Fallback: try lenient parsing (handles SSE, trailing chars, etc.)
+        let parsedByManual: any = null
+        try {
+          parsedByManual = this.parseJsonLenient(responseText)
+        } catch { /* ignore */ }
+
+        if (parsedByManual) {
+          data = parsedByManual
+        } else {
+          logger.error({ err: parseErr.message, responseStatus: response.status, bodyPreview: responseText.substring(0, 300) }, 'AI: Failed to parse JSON response')
+          const err = new Error('Malformed AI response: ' + parseErr.message)
+          ;(err as any).status = 400
+
+          if (attempt < MAX_RETRIES && this.isRetryable(err)) {
+            const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1) + Math.random() * 500
+            logger.warn({ attempt: attempt, delayMs: Math.round(delay), responseStatus: response.status }, 'AI: retrying after parse error')
+            await this.sleep(delay)
+            lastError = err
+            continue
+          }
+
+          throw err
         }
+      }
 
-        const result: ChatResponse = {
-          content: message.content || null,
-          toolCalls: [],
-        }
+      const choice = data.choices?.[0]
+      const message = choice?.message
 
-        // Parse tool calls if any
-        if (message.tool_calls) {
-          result.toolCalls = message.tool_calls.map((tc: any) => ({
-            id: tc.id,
-            type: 'function',
-            function: {
-              name: tc.function.name,
-              arguments: tc.function.arguments,
-            },
-          }))
-        }
+      if (!message) {
+        throw new Error('No response from AI')
+      }
 
-        logger.info({ hasContent: !!result.content, toolCallsCount: result.toolCalls.length, attempt }, 'AI: response received')
-        return result
+      const result: ChatResponse = {
+        content: message.content || null,
+        toolCalls: [],
+      }
+
+      // Parse tool calls if any
+      if (message.tool_calls) {
+        result.toolCalls = message.tool_calls.map((tc: any) => ({
+          id: tc.id,
+          type: 'function',
+          function: {
+            name: tc.function.name,
+            arguments: tc.function.arguments,
+          },
+        }))
+      }
+
+      logger.info({ hasContent: !!result.content, toolCallsCount: result.toolCalls.length, attempt }, 'AI: response received')
+      return result
 
       } catch (err: any) {
         if (err.name === 'AbortError') {
@@ -186,7 +217,7 @@ export class AIBridge {
         }
 
         // Fallback model if primary failed and we haven't tried fallback yet
-        if (selectedModel !== this.fallbackModel) {
+        if (body.model !== this.fallbackModel) {
           logger.warn({ fallbackModel: this.fallbackModel }, 'AI: falling back to backup model')
           body.model = this.fallbackModel
           attempt-- // Don't burn retry
@@ -204,7 +235,7 @@ export class AIBridge {
   /** Full tool calling loop — calls AI, executes tools, returns final response */
   async chatWithTools(
     systemPrompt: string,
-    userMessage: string,
+    userMessage: string | any[],
     tools: ToolDef[],
     toolHandlers: Map<string, (args: Record<string, unknown>) => Promise<string>>,
     model?: string,
@@ -263,7 +294,7 @@ export class AIBridge {
         // Add assistant message with tool call + tool result
         messages.push({
           role: 'assistant',
-          content: null!,
+          content: '',
           tool_calls: [toolCall],
         })
         messages.push({
@@ -275,6 +306,101 @@ export class AIBridge {
     }
 
     return finalText
+  }
+
+  /**
+   * Lenient JSON parser: tries common fixes for malformed API responses
+   * 1. Trims whitespace
+   * 2. Handles SSE streams (lines starting with "data:")
+   * 3. Removes trailing commas
+   * 4. Takes only the first JSON object if multiple concatenated
+   */
+  private parseJsonLenient(text: string): any | null {
+    if (!text || typeof text !== 'string') return null
+
+    // Try the standard parser first on trimmed text
+    const trimmed = text.trim()
+    try {
+      return JSON.parse(trimmed)
+    } catch { /* continue */ }
+
+    // Handle SSE (Server-Sent Events) streams — lines prefixed with "data:"
+    // The final "data: [DONE]" is the terminal marker, ignore it
+    if (trimmed.includes('data:')) {
+      const sseLines = trimmed
+        .split('\n')
+        .map(line => line.replace(/^data:\s*/, '').trim())
+        .filter(line => line.length > 0 && line !== '[DONE]')
+
+      // Try to find a non-streaming completion event first (has choices[0].message)
+      for (const line of sseLines) {
+        try {
+          const obj = JSON.parse(line)
+          if (obj.choices?.[0]?.message) {
+            return obj // Found full non-streaming response
+          }
+        } catch { /* continue */ }
+      }
+
+      // Streaming mode: reconstruct message from all delta chunks
+      const allChunks: any[] = []
+      for (const line of sseLines) {
+        try {
+          const obj = JSON.parse(line)
+          if (obj.choices?.[0]?.delta) {
+            allChunks.push(obj)
+          }
+        } catch { /* continue */ }
+      }
+
+      if (allChunks.length > 0) {
+        // Reconstruct full message from delta chunks
+        let content = ''
+        let role = 'assistant'
+        const lastChunk = allChunks[allChunks.length - 1]
+        const id = lastChunk.id || ''
+
+        for (const chunk of allChunks) {
+          const delta = chunk.choices[0].delta
+          if (delta.role) role = delta.role
+          if (delta.content) content += delta.content
+        }
+
+        return {
+          id,
+          object: 'chat.completion',
+          choices: [{
+            index: 0,
+            message: { role, content },
+            finish_reason: 'stop',
+          }],
+        }
+      }
+    }
+
+    // Remove trailing commas before } or ]
+    try {
+      const noTrailingCommas = trimmed.replace(/,(\s*[}\]])/g, '$1')
+      return JSON.parse(noTrailingCommas)
+    } catch { /* continue */ }
+
+    // Extract first complete JSON object / array from the stream
+    const objectMatch = trimmed.match(/\{[\s\S]*\}/)
+    const arrayMatch = trimmed.match(/\[[\s\S]*\]/)
+
+    const candidate = objectMatch ? objectMatch[0] : arrayMatch ? arrayMatch[0] : null
+    if (!candidate) return null
+
+    try {
+      return JSON.parse(candidate)
+    } catch { /* continue */ }
+
+    // Try removing trailing commas on the extracted object too
+    try {
+      return JSON.parse(candidate.replace(/,(\s*[}\]])/g, '$1'))
+    } catch { /* continue */ }
+
+    return null
   }
 
   /** Summarize memory when it gets too long */
@@ -296,13 +422,13 @@ export class AIBridge {
   }
 
   /** Simple non-tool chat (for simple tasks) */
-  async simpleChat(systemPrompt: string, userMessage: string): Promise<string> {
+  async simpleChat(systemPrompt: string, userMessage: string | any[]): Promise<string> {
     const messages: AIMessage[] = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userMessage },
     ]
     const response = await this.chat({ messages })
-    return response.content || ''
+    return (response.content as string) || ''
   }
 }
 

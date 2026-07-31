@@ -19,7 +19,7 @@ interface StickerArgs {
 const AUTHOR = 'yoks'
 const PACK = '🕷'
 
-export async function handleSticker(args: StickerArgs, context: any): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: string; error?: string }> {
+export async function handleSticker(args: StickerArgs, context: any): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: 'sticker' | 'document' | 'video' | 'audio' | 'image'; error?: string }> {
   try {
     let buffer: Buffer | null = null
 

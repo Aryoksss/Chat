@@ -3,10 +3,11 @@
 // ============================================================
 
 import { WhatsAppClient } from './core/client.js'
-import { validateConfig } from './system/config.js'
+import { validateConfigOrExit } from './system/config.js'
 import { logger } from './system/logger.js'
 import { personaLoader } from './persona/loader.js'
 import { messageHandler } from './message/handler.js'
+import { registerAllTools } from './tools/register-tools.js'
 
 async function main() {
   console.log(`
@@ -16,16 +17,12 @@ async function main() {
 ╚══════════════════════════════════════╝
   `)
 
-  // 1. Validate config
-  const errors = validateConfig()
-  if (errors.length > 0) {
-    logger.error({ errors }, 'Config validation failed')
-    console.error('❌ Config errors:')
-    errors.forEach(e => console.error(`   - ${e}`))
-    console.error('\n📝 Edit .env file and restart.')
-    process.exit(1)
-  }
+  // 1. Validate config (explicit call, no side effects)
+  validateConfigOrExit()
   logger.info('✅ Config validated')
+
+  // 1.5 Register tools
+  registerAllTools()
 
   // 2. Load personas
   logger.info('Loading personas...')

@@ -10,7 +10,7 @@ interface TtArgs {
   url: string
 }
 
-export async function handleTtDownload(args: TtArgs): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: string; caption?: string; error?: string }> {
+export async function handleTtDownload(args: TtArgs): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: 'image' | 'video' | 'sticker' | 'audio' | 'document'; caption?: string; error?: string }> {
   const { url } = args
 
   if (!url || !url.includes('tiktok.com')) {

@@ -19,26 +19,6 @@ export class ToolsRegistry {
     logger.info({ tool: def.name }, 'Tool registered')
   }
 
-  /** Get tool handler by name */
-  getHandler(name: string): ((args: Record<string, unknown>) => Promise<string>) | null {
-    const entry = this.tools.get(name)
-    if (!entry) return null
-
-    // Wraps the actual handler to return a string for AI consumption
-    return async (args: Record<string, unknown>) => {
-      try {
-        const result = await entry.handler(args, {} as ToolContext)
-        if (result.success) {
-          return result.text || `✅ ${entry.def.name} berhasil dieksekusi.`
-        }
-        return `❌ Gagal: ${result.error || 'Unknown error'}`
-      } catch (err: any) {
-        logger.error({ err, tool: name }, 'Tool execution failed')
-        return `❌ Error: ${err.message}`
-      }
-    }
-  }
-
   /** Get all tool definitions (for AI function calling) */
   getDefinitions(): ToolDef[] {
     return Array.from(this.tools.values()).map(e => e.def)

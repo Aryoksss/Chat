@@ -11,7 +11,7 @@ interface YtArgs {
   format?: string
 }
 
-export async function handleYtDownload(args: YtArgs): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: string; error?: string }> {
+export async function handleYtDownload(args: YtArgs): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: 'image' | 'video' | 'sticker' | 'audio' | 'document'; error?: string }> {
   const { url, format = 'video' } = args
 
   if (!url || !url.includes('youtube.com') && !url.includes('youtu.be')) {
