@@ -10,6 +10,7 @@ Bot WhatsApp berbasis TypeScript dengan persona terpisah untuk owner dan grup, i
 - Database SQLite lokal untuk profil anggota grup, reply tracking, job media, riwayat sticker, dan reminder.
 - Reply ke seluruh keluaran bot (teks/gambar/video/sticker) tetap dikenali setelah restart.
 - Sticker kontekstual memakai skor emosi, confidence, dan rotasi deterministik agar tidak repetitif.
+- Balasan VN memakai suara Hu Tao (Edge-TTS + RVC); chat santai sesekali dibalas VN dengan peluang dan cooldown yang dapat diatur.
 - Reminder sekali/berulang dengan pesan jatuh tempo yang disusun AI secara bervariasi.
 - Menu WhatsApp interaktif dengan fallback ke menu teks.
 - Prefix command `.`, `/`, dan `!`. Nilai `PREFIX` menjadi prefix utama yang ditampilkan di menu.
@@ -73,6 +74,10 @@ Konfigurasi opsional lainnya:
 ```env
 WHISPER_API_URL=
 HUTAO_VOICE_SCRIPT=
+HUTAO_AUTO_VOICE_ENABLED=true
+HUTAO_AUTO_VOICE_CHANCE=0.18
+HUTAO_AUTO_VOICE_COOLDOWN_MS=600000
+HUTAO_AUTO_VOICE_MAX_CHARS=240
 KUSONIME_DOMAIN=https://kusonime.com
 AI_TIMEOUT_MS=60000
 CF_IMAGE_TIMEOUT_MS=60000

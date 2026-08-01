@@ -400,7 +400,7 @@ export class WhatsAppClient {
     fileType: 'sticker' | 'image' | 'video' | 'document' | 'audio',
     caption?: string,
     quoted?: any
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const payload: Record<string, any> = {}
 
@@ -427,8 +427,10 @@ export class WhatsAppClient {
 
       const result = await this.sock.sendMessage(jid, payload as any, quoted ? { quoted } : undefined)
       this.rememberSentResult(jid, result, fileType)
+      return true
     } catch (err) {
       logger.error({ err, filePath, fileType }, 'Failed to send file')
+      return false
     }
   }
 

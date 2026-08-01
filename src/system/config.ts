@@ -7,6 +7,21 @@ import path from 'path'
 
 const ROOT = process.cwd()
 
+function numberEnv(name: string, fallback: number): number {
+  const value = process.env[name]?.trim()
+  if (!value) return fallback
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function booleanEnv(name: string, fallback: boolean): boolean {
+  const value = process.env[name]?.trim().toLowerCase()
+  if (!value) return fallback
+  if (['1', 'true', 'yes', 'on'].includes(value)) return true
+  if (['0', 'false', 'no', 'off'].includes(value)) return false
+  return fallback
+}
+
 export const config = {
   // === 9router AI ===
   NINE_ROUTER_API_KEY: process.env.NINE_ROUTER_API_KEY || '',
@@ -51,6 +66,10 @@ export const config = {
   // === Hu Tao TTS (Edge-TTS + RVC bash script) ===
   // Path ke script bash hutao-voice-note. Default cek ~/.openclaw/tools/.
   HUTAO_VOICE_SCRIPT: process.env.HUTAO_VOICE_SCRIPT || '',
+  HUTAO_AUTO_VOICE_ENABLED: booleanEnv('HUTAO_AUTO_VOICE_ENABLED', true),
+  HUTAO_AUTO_VOICE_CHANCE: Math.max(0, Math.min(1, numberEnv('HUTAO_AUTO_VOICE_CHANCE', 0.18))),
+  HUTAO_AUTO_VOICE_COOLDOWN_MS: Math.max(0, numberEnv('HUTAO_AUTO_VOICE_COOLDOWN_MS', 10 * 60 * 1000)),
+  HUTAO_AUTO_VOICE_MAX_CHARS: Math.max(40, numberEnv('HUTAO_AUTO_VOICE_MAX_CHARS', 240)),
 
   PREFIX: process.env.PREFIX || '.',                   // Command prefix
   // Accept the configured prefix plus common WhatsApp-style alternatives.

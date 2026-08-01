@@ -11,6 +11,7 @@ import { memoryManager, memoryScope } from '../memory/manager.js'
 import { cmdHandler } from '../system/cmd-handler.js'
 import { toolExecutor } from '../tools/executor.js'
 import { audioManager } from '../audio/manager.js'
+import { decideAutoVoice, isExplicitVoiceRequest } from '../audio/auto-voice.js'
 import { get4khdContext, get4khdContinuation } from '../tools/handlers/fourkhd.js'
 import { getAnimeContext } from '../tools/handlers/anime-dl.js'
 import { archiveIncomingSticker, getStickerPoolContext, isStickerInPool, promoteStickerToPool } from '../stickers/archive.js'
@@ -78,6 +79,7 @@ export class MessageHandler {
   private jidStates = new Map<string, JidState>()
   private conversationHistory = new Map<string, ConversationState>()
   private imageAlbums = new Map<string, ImageAlbumState>()
+  private lastVoiceReplyAt = new Map<string, number>()
   private acceptingMessages = true
 
   setPersonas(personas: Map<'owner' | 'group', PersonaConfig>): void {
@@ -738,7 +740,12 @@ export class MessageHandler {
 
       // Natural reactions can trigger a contextual sticker without an explicit
       // "kirim sticker" command. Keep this conservative to avoid sticker spam.
-      const autoStickerContext = this.getAutoStickerContext(msg)
+      // An explicit request for a VN takes precedence over an automatic sticker
+      // so the bot does not answer one message with two different media types.
+      const autoStickerContext = isExplicitVoiceRequest(msg.text || '')
+        ? null
+        : this.getAutoStickerContext(msg)
+      let autoStickerSent = false
       if (autoStickerContext) {
         const stickerContext = {
           sock: client.sock,
@@ -748,40 +755,67 @@ export class MessageHandler {
           suppressTextResponse: false,
         }
         await toolExecutor.executeToolCall('sticker-pool', { context: autoStickerContext }, stickerContext)
+        autoStickerSent = stickerContext.suppressTextResponse
       }
 
       if (response?.trim()) {
         if (!response.startsWith('Maaf, ada gangguan teknis')) {
           this.rememberConversation(scope, userContent, response)
         }
-        // Generate Hu Tao Voice Note if user sent an audio message
-        if (msg.messageType === 'audio') {
+        const voiceDecision = decideAutoVoice({
+          enabled: config.HUTAO_AUTO_VOICE_ENABLED,
+          messageType: msg.messageType,
+          messageText: msg.text || '',
+          response,
+          autoStickerSent,
+          isCommand: hasCommandPrefix(msg.text || ''),
+          chance: config.HUTAO_AUTO_VOICE_CHANCE,
+          cooldownMs: config.HUTAO_AUTO_VOICE_COOLDOWN_MS,
+          maxChars: config.HUTAO_AUTO_VOICE_MAX_CHARS,
+          lastVoiceAt: this.lastVoiceReplyAt.get(msg.jid),
+        })
+        let sentAsVoice = false
+
+        if (voiceDecision.send) {
           try {
+            // The TTS/RVC pipeline can take several seconds. Stop the composing
+            // timer so it does not overwrite WhatsApp's recording indicator.
+            stopTyping()
             await client.sendPresence(msg.jid, 'recording')
-            const voiceBuffer = await audioManager.generateHuTaoVoice(response)
+            const recordingTimer = setInterval(() => {
+              client.sendPresence(msg.jid, 'recording').catch(() => {})
+            }, 8000)
+            let voiceBuffer: Buffer | null = null
+            try {
+              voiceBuffer = await audioManager.generateHuTaoVoice(voiceDecision.voiceText)
+            } finally {
+              clearInterval(recordingTimer)
+            }
 
             if (voiceBuffer) {
               const outPath = join(tmpdir(), `hutao_vn_${Date.now()}.ogg`)
               try {
                 await writeFile(outPath, voiceBuffer)
-                await client.sendFile(msg.jid, outPath, 'audio', undefined, msg.raw)
+                sentAsVoice = await client.sendFile(msg.jid, outPath, 'audio', undefined, msg.raw)
               } finally {
                 await unlink(outPath).catch(() => {})
               }
-              // Return after sending VN to avoid double sending (text + VN).
-              // Alternatively, remove return to send both. We'll only send VN here.
-              return
+              if (sentAsVoice) {
+                this.lastVoiceReplyAt.set(msg.jid, Date.now())
+                logger.info({ jid: msg.jid, reason: voiceDecision.reason }, 'Hu Tao voice-note reply sent')
+              }
             }
           } catch (err) {
             logger.error({ err }, 'Failed to send VN response, falling back to text')
           }
         }
 
-        // Send standard text if not a Voice Note or if Voice Note generation failed.
-        // Hold briefly so the "typing…" bubble stays visible before the reply.
-        await waitForTypingVisible()
-        // Reply to the user's message (quoted) instead of a fresh chat bubble.
-        await client.sendText(msg.jid, response, msg.raw)
+        if (!sentAsVoice) {
+          // Send standard text if voice was not selected or generation failed.
+          await client.sendPresence(msg.jid, 'composing').catch(() => {})
+          await waitForTypingVisible()
+          await client.sendText(msg.jid, response, msg.raw)
+        }
 
         // Save ke memory (ringkasan) — hanya percakapan yang bermakna,
         // jangan simpan ping/tes atau respons generik/error bot.

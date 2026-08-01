@@ -8,6 +8,7 @@ import { BotDatabase } from '../src/storage/database.js'
 import { parseReminderRequest } from '../src/reminders/parser.js'
 import { selectByContext, type StickerPoolEntry } from '../src/tools/handlers/sticker-pool.js'
 import { handleSmeme } from '../src/tools/handlers/smeme.js'
+import { decideAutoVoice, prepareVoiceText } from '../src/audio/auto-voice.js'
 
 test('reminder parser understands relative, daily, and weekly Indonesian time', () => {
   const now = new Date('2026-08-02T02:00:00+07:00')
@@ -75,6 +76,41 @@ test('sticker selector matches emotion and avoids a recently used sticker', () =
   ]
   assert.equal(selectByContext(entries, 'aku marah banget')?.entry.file, '/pool/angry.webp')
   assert.equal(selectByContext(entries, 'wkwk ngakak', ['funny-a.webp'])?.entry.file, '/pool/funny-b.webp')
+})
+
+test('Hu Tao auto voice always handles VN and explicit requests', () => {
+  const base = {
+    enabled: false,
+    response: 'iyaa, aku dengerin kok 😊',
+    autoStickerSent: false,
+    isCommand: false,
+    chance: 0,
+    cooldownMs: 600_000,
+    maxChars: 240,
+  }
+  assert.equal(decideAutoVoice({ ...base, messageType: 'audio', messageText: '' }).reason, 'audio-reply')
+  assert.equal(decideAutoVoice({ ...base, messageType: 'text', messageText: 'balas pakai vn dong' }).reason, 'explicit-request')
+  assert.equal(prepareVoiceText('*halo* 😂 https://example.com'), 'halo link')
+})
+
+test('Hu Tao automatic voice uses chance, cooldown, and avoids sticker overlap', () => {
+  const base = {
+    enabled: true,
+    messageType: 'text',
+    messageText: 'wkwk lucu banget',
+    response: 'iya, aku juga ngakak banget!',
+    autoStickerSent: false,
+    isCommand: false,
+    chance: 0.18,
+    cooldownMs: 600_000,
+    maxChars: 240,
+    now: 1_000_000,
+  }
+  assert.equal(decideAutoVoice({ ...base, random: () => 0.1 }).reason, 'automatic')
+  assert.equal(decideAutoVoice({ ...base, random: () => 0.9 }).send, false)
+  assert.equal(decideAutoVoice({ ...base, lastVoiceAt: 900_000, random: () => 0 }).send, false)
+  assert.equal(decideAutoVoice({ ...base, autoStickerSent: true, random: () => 0 }).send, false)
+  assert.equal(decideAutoVoice({ ...base, messageText: 'tolong debug kode ini', random: () => 0 }).send, false)
 })
 
 test('smeme turns a video into an animated WebP sticker', async (t) => {
