@@ -351,7 +351,14 @@ export class MessageHandler {
     const memory = await memoryManager.getContent(scope)
 
     // Build system prompt
-    let systemPrompt = aiBridge.buildSystemPrompt(persona.agent, persona.soul, memory, persona.identity, persona.user)
+    let systemPrompt = aiBridge.buildSystemPrompt(
+      persona.agent,
+      persona.soul,
+      memory,
+      persona.identity,
+      persona.user,
+      personaType === 'owner',
+    )
 
     // Inject 4KHD active results (if any) so the AI remembers the last search
     // across turns (e.g. user: "kirim no 2" after a 4khd-search result list).
