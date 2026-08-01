@@ -6,6 +6,53 @@ import { registerAllTools } from '../src/tools/register-tools.js'
 
 registerAllTools()
 
+test('main menu only shows categories and hides direct feature rows', () => {
+  const handler = new CommandHandler() as any
+  const sections = handler.buildMenuCategorySections('.', false, true)
+  const rows = sections.flatMap((section: any) => section.rows)
+
+  assert.ok(rows.some((row: any) => row.rowId === '.menu-ai'))
+  assert.ok(rows.some((row: any) => row.rowId === '.menu-media'))
+  assert.ok(rows.some((row: any) => row.rowId === '.menu-utility'))
+  assert.ok(rows.some((row: any) => row.rowId === '.menu-group'))
+  assert.equal(rows.some((row: any) => row.rowId === '.sticker'), false)
+  assert.equal(rows.some((row: any) => row.rowId === '.jobs'), false)
+})
+
+test('private main menu shows owner category but not group category', () => {
+  const handler = new CommandHandler() as any
+  const sections = handler.buildMenuCategorySections('.', true, false)
+  const rows = sections.flatMap((section: any) => section.rows)
+
+  assert.ok(rows.some((row: any) => row.rowId === '.menu-owner'))
+  assert.equal(rows.some((row: any) => row.rowId === '.menu-group'), false)
+})
+
+test('AI helper is delivered as a dropdown menu', async () => {
+  const handler = new CommandHandler()
+  let listCalls = 0
+  let textCalls = 0
+  const client = {
+    sendListMenu: async () => { listCalls++; return true },
+    sendText: async () => { textCalls++ },
+  }
+  const handled = await handler.handle({
+    jid: 'owner@lid',
+    sender: 'owner',
+    text: '.helper',
+    messageType: 'text',
+    hasMedia: false,
+    isGroup: false,
+    isBotMentioned: false,
+    isReplyToBot: false,
+    raw: {},
+  } as any, client as any)
+
+  assert.equal(handled, true)
+  assert.equal(listCalls, 1)
+  assert.equal(textCalls, 0)
+})
+
 test('group menu excludes owner commands and private pap tool', () => {
   const handler = new CommandHandler() as any
   const sections = handler.buildMenuSections(toolsRegistry.getDefinitions(), '!', false)
@@ -14,6 +61,9 @@ test('group menu excludes owner commands and private pap tool', () => {
   assert.equal(sections.some((section: any) => section.title === 'Owner'), false)
   assert.equal(rows.some((row: any) => row.rowId.startsWith('!')), true)
   assert.equal(rows.some((row: any) => row.rowId.includes('pap')), false)
+  assert.ok(rows.some((row: any) => row.rowId === '!jobs'))
+  assert.ok(rows.some((row: any) => row.rowId === '!reminders'))
+  assert.ok(rows.some((row: any) => row.rowId === '!anggota'))
 })
 
 test('owner menu includes owner commands', () => {
@@ -22,5 +72,7 @@ test('owner menu includes owner commands', () => {
   const owner = sections.find((section: any) => section.title === 'Owner')
 
   assert.ok(owner)
-  assert.deepEqual(owner.rows.map((row: any) => row.rowId), ['/status', '/reload', '/memory', '/clear'])
+  assert.ok(owner.rows.some((row: any) => row.rowId === '/groups'))
+  assert.ok(owner.rows.some((row: any) => row.rowId === '/group-allow'))
+  assert.ok(owner.rows.some((row: any) => row.rowId === '/stickers'))
 })
