@@ -1,0 +1,17 @@
+[
+  {
+    "file": "ketawa.webp",
+    "tags": ["lucu", "ketawa", "ngakak", "senang"],
+    "description": "Dipakai saat suasana bercanda atau ada hal yang sangat lucu."
+  },
+  {
+    "file": "sedih.webp",
+    "tags": ["sedih", "kecewa", "nangis", "rindu"],
+    "description": "Dipakai saat user sedang sedih atau kecewa."
+  },
+  {
+    "file": "default.webp",
+    "tags": ["default"],
+    "description": "Sticker netral jika konteks tidak spesifik."
+  }
+]
