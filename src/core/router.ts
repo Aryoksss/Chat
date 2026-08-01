@@ -8,8 +8,11 @@ import type { PersonaType } from './types.js'
 export class Router {
   /** Determine persona based on sender and chat type */
   route(jid: string, sender: string, isGroup: boolean): PersonaType | null {
-    // Owner DM — pesan dari nomor owner di chat pribadi
-    if (!isGroup && sender === config.OWNER_NUMBER) {
+    // Owner DM — pesan dari nomor owner di chat pribadi.
+    // WhatsApp reports senders by their LID (e.g. "93210101727329") rather than by
+    // their phone number, so match against both the owner number and owner LID.
+    const ownerIds = [config.OWNER_NUMBER, config.OWNER_LID].filter(Boolean)
+    if (!isGroup && ownerIds.includes(sender)) {
       return 'owner'
     }
 

@@ -32,6 +32,7 @@ export interface ToolResult {
   success: boolean
   text?: string           // Text response for AI
   filePath?: string       // Path to file to send (sticker, download, etc.)
+  filePaths?: string[]    // Multiple files to send in one call (e.g. photo gallery)
   fileType?: 'sticker' | 'document' | 'video' | 'audio' | 'image'
   caption?: string        // Caption for the file
   error?: string
@@ -42,6 +43,8 @@ export interface PersonaConfig {
   name: string
   agent: string           // AGENT.md content
   soul: string            // SOUL.md content
+  identity?: string       // IDENTITY.md content — who the persona is
+  user?: string           // USER.md content — context/preferences about the user
   tools: ToolDef[]        // Parsed from TOOLS.md
 }
 

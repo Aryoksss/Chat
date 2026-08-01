@@ -48,12 +48,17 @@ async function main() {
   await client.start()
 
   // Handle graceful shutdown
+  let shuttingDown = false
   const shutdown = async () => {
+    if (shuttingDown) return
+    shuttingDown = true
     logger.info('Shutting down...')
+    await messageHandler.shutdown()
+    await client.stop()
     process.exit(0)
   }
-  process.on('SIGINT', shutdown)
-  process.on('SIGTERM', shutdown)
+  process.once('SIGINT', shutdown)
+  process.once('SIGTERM', shutdown)
 }
 
 main().catch(err => {
