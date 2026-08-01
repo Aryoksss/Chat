@@ -51,6 +51,7 @@ export class ToolExecutor {
               await context.sock.sendMessage(context.jid, {
                 sticker: { url: result.filePath },
               }, context.rawMessage ? { quoted: context.rawMessage } : undefined)
+              context.suppressTextResponse = true
             } else {
               await context.sock.sendMessage(context.jid, {
                 [result.fileType || 'document']: { url: result.filePath },
@@ -63,6 +64,7 @@ export class ToolExecutor {
             await this.cleanupTempFile(result.filePath)
           }
         }
+        if (context.suppressTextResponse) return ''
         return result.text || `✅ ${toolName} berhasil!`
       }
 

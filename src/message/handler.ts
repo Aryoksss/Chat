@@ -463,7 +463,8 @@ export class MessageHandler {
         jid: msg.jid,
         participant: msg.participant,
         downloadMedia: async (m: any) => client.downloadMedia(m),
-        rawMessage: msg.raw // Allow tools (like sticker maker) to access the raw message directly
+        rawMessage: msg.raw, // Allow tools (like sticker maker) to access the raw message directly
+        suppressTextResponse: false,
       }
       const handlerMap = toolExecutor.createHandlerMap(toolContext)
       const history = this.getConversationHistory(scope)
@@ -474,6 +475,10 @@ export class MessageHandler {
 
       // Debug log dulu sebelum dikirim
       logger.info({ response }, 'RESPONSE-before-send')
+
+      if (toolContext.suppressTextResponse) {
+        return
+      }
 
       if (response?.trim()) {
         if (!response.startsWith('Maaf, ada gangguan teknis')) {
@@ -629,7 +634,8 @@ export class MessageHandler {
       jid: msg.jid,
       participant: msg.participant,
       downloadMedia: async (m: any) => client.downloadMedia(m),
-      rawMessage: msg.raw // Allow tools (like sticker maker) to read the replied image
+      rawMessage: msg.raw, // Allow tools (like sticker maker) to read the replied image
+      suppressTextResponse: false,
     }
 
     const parsedArgs = this.parseCommandArgs(command, args, msg)
@@ -642,6 +648,7 @@ export class MessageHandler {
 
     try {
       const result = await toolExecutor.executeToolCall(toolName, parsedArgs, toolContext)
+      if (toolContext.suppressTextResponse) return true
       // Kirim teks hasil apa pun (file tools = "✅ ...", text tools = hasil list,
       // gagal = "❌ ..."). Skip kalau kosong (besar kemungkinan file sudah terkirim
       // via socket oleh executor).

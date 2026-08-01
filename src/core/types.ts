@@ -25,6 +25,7 @@ export interface ToolContext {
   participant?: string     // Participant who sent message (null in DM)
   downloadMedia?: (msg: any) => Promise<Buffer | null>
   rawMessage?: any         // Raw Baileys message object
+  suppressTextResponse?: boolean // Tool already sent the final media response
 }
 
 /** Result from a tool execution */
