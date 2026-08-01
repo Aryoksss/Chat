@@ -3,6 +3,7 @@
 // ============================================================
 
 import { config } from '../system/config.js'
+import { getGroupAccess } from '../system/group-access.js'
 import type { PersonaType } from './types.js'
 
 export class Router {
@@ -18,6 +19,8 @@ export class Router {
 
     // Group — cek apakah grup yang diizinkan
     if (isGroup) {
+      const explicitAccess = getGroupAccess(jid)
+      if (explicitAccess !== undefined) return explicitAccess ? 'group' : null
       // Kalau GROUP_JID dikosongkan, respon di semua grup
       if (!config.GROUP_JID) return 'group'
 

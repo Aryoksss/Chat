@@ -64,6 +64,11 @@ export const config = {
   PERSONAS_DIR: path.resolve(ROOT, 'personas'),
   MEMORY_FILE: path.resolve(ROOT, 'memory', 'MEMORY.md'),
   DOWNLOADS_DIR: path.resolve(ROOT, 'data', 'downloads'),
+  STICKER_POOL_DIR: path.resolve(ROOT, process.env.STICKER_POOL_DIR || 'data/stickers/pool'),
+  STICKER_ARCHIVE_DIR: path.resolve(ROOT, process.env.STICKER_ARCHIVE_DIR || 'data/stickers/inbox'),
+  GROUP_REGISTRY_FILE: path.resolve(ROOT, process.env.GROUP_REGISTRY_FILE || 'data/groups.json'),
+  GROUP_ACCESS_FILE: path.resolve(ROOT, process.env.GROUP_ACCESS_FILE || 'data/group-access.json'),
+  DATABASE_FILE: path.resolve(ROOT, process.env.DATABASE_FILE || 'data/bot.db'),
   TEMP_DIR: path.resolve(ROOT, 'data', 'temp'),
   COOKIES_DIR: path.resolve(ROOT, 'data', 'cookies'),
 } as const

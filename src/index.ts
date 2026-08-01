@@ -8,6 +8,9 @@ import { logger } from './system/logger.js'
 import { personaLoader } from './persona/loader.js'
 import { messageHandler } from './message/handler.js'
 import { registerAllTools } from './tools/register-tools.js'
+import { loadGroupAccess } from './system/group-access.js'
+import { reminderManager } from './reminders/manager.js'
+import { botDatabase } from './storage/database.js'
 
 async function main() {
   console.log(`
@@ -19,6 +22,7 @@ async function main() {
 
   // 1. Validate config (explicit call, no side effects)
   validateConfigOrExit()
+  await loadGroupAccess()
   logger.info('✅ Config validated')
 
   // 1.5 Register tools
@@ -46,6 +50,7 @@ async function main() {
 
   // 6. Connect
   await client.start()
+  reminderManager.start(client)
 
   // Handle graceful shutdown
   let shuttingDown = false
@@ -54,7 +59,9 @@ async function main() {
     shuttingDown = true
     logger.info('Shutting down...')
     await messageHandler.shutdown()
+    reminderManager.stop()
     await client.stop()
+    botDatabase.close()
     process.exit(0)
   }
   process.once('SIGINT', shutdown)

@@ -25,7 +25,9 @@ export interface ToolContext {
   participant?: string     // Participant who sent message (null in DM)
   downloadMedia?: (msg: any) => Promise<Buffer | null>
   rawMessage?: any         // Raw Baileys message object
+  rawMessages?: any[]      // Album/batch media messages
   suppressTextResponse?: boolean // Tool already sent the final media response
+  mediaJobId?: string      // Active media job, assigned by ToolExecutor
 }
 
 /** Result from a tool execution */
@@ -82,9 +84,12 @@ export interface IncomingMessage {
   messageType: MessageContentType
   hasMedia: boolean
   quotedText?: string      // Text from replied-to message
+  quotedParticipant?: string // Author JID of replied-to group message
   isGroup: boolean
   participant?: string     // Group participant number
+  displayName?: string     // WhatsApp pushName when available
   isBotMentioned: boolean  // Whether bot @mention in group message
   isReplyToBot: boolean    // Whether replying to bot's message
   raw: any                 // Original Baileys message object
+  mediaJobId?: string      // Pre-created queued media job
 }
