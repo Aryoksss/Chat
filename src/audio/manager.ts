@@ -6,8 +6,27 @@ import { config } from '../system/config.js'
 import { logger } from '../system/logger.js'
 import { spawn } from 'child_process'
 import { tmpdir, homedir } from 'os'
-import { join } from 'path'
-import { writeFile, readFile, unlink } from 'fs/promises'
+import { join, resolve } from 'path'
+import { access, readFile, unlink } from 'fs/promises'
+
+/** Resolve lokasi script bash hutao-voice-note. Prioritas: config → ~/.openclaw/tools/hutao-voice-note → VPS hutao-rvc. */
+async function resolveHutaoScript(): Promise<string | null> {
+  const candidates = [
+    config.HUTAO_VOICE_SCRIPT,
+    `${homedir()}/.openclaw/tools/hutao-voice-note`,
+    `${homedir()}/.openclaw/tools/hutao-rvc/hutao-voice-note`,
+  ].filter(Boolean)
+
+  for (const c of candidates) {
+    try {
+      await access(c)
+      return resolve(c)
+    } catch {
+      // not found/executable — coba kandidat berikutnya
+    }
+  }
+  return null
+}
 
 export class AudioManager {
   /**
@@ -38,27 +57,27 @@ export class AudioManager {
   }
 
   /**
-   * 2. Full Pipeline: Text -> Edge-TTS -> RVC Python (Hu Tao)
-   * Executes the local Python script that handles the Edge-TTS + RVC conversion
+   * 2. Text -> Edge-TTS -> RVC (Hu Tao).
+   * Menjalankan script bash hutao-voice-note (VPS): --text "..." --output out.ogg
    */
   async generateHuTaoVoice(text: string): Promise<Buffer | null> {
     logger.info('Generating Voice Note (Edge-TTS + RVC Local)...')
 
-    // We create a temporary text file because passing long strings via CLI arguments can cause issues
-    const tempTextPath = join(tmpdir(), `hutao_text_${Date.now()}.txt`)
+    const scriptPath = await resolveHutaoScript()
+    if (!scriptPath) {
+      logger.error('hutao-voice-note script not found (set HUTAO_VOICE_SCRIPT or place at ~/.openclaw/tools/)')
+      return null
+    }
+
     const tempOutPath = join(tmpdir(), `hutao_out_${Date.now()}.ogg`)
 
     try {
-      await writeFile(tempTextPath, text)
-
-      // Use spawn with array arguments to prevent shell injection
-      // Don't use shell: true to avoid injection vulnerabilities
-      const scriptPath = homedir() + '/.openclaw/tools/hutao-voice-note'
-      
-      const child = spawn('python3', [
+      // Script bash VPS menerima --text (teks langsung) + --output.
+      // Gunakan spawn array (tanpa shell) untuk mencegah injection.
+      const child = spawn('bash', [
         scriptPath,
-        '--text-file', tempTextPath,
-        '--output', tempOutPath
+        '--text', text,
+        '--output', tempOutPath,
       ])
 
       // Collect stdout/stderr for debugging
@@ -68,8 +87,8 @@ export class AudioManager {
       child.stderr?.on('data', (data) => { stderr += data })
 
       // Wait for process to complete
-      const exitCode = await new Promise<number>((resolve, reject) => {
-        child.on('close', resolve)
+      const exitCode = await new Promise<number>((resolve2, reject) => {
+        child.on('close', resolve2)
         child.on('error', reject)
       })
 
@@ -78,25 +97,19 @@ export class AudioManager {
       }
 
       if (exitCode !== 0) {
-        throw new Error(`Python script exited with code ${exitCode}: ${stderr}`)
+        throw new Error(`hutao-voice-note exited with code ${exitCode}: ${stderr}`)
       }
 
       const audioBuffer = await readFile(tempOutPath)
 
-      // Cleanup temp files
-      Promise.all([
-          unlink(tempTextPath).catch(() => {}),
-          unlink(tempOutPath).catch(() => {})
-      ])
+      // Cleanup temp file
+      unlink(tempOutPath).catch(() => {})
 
       return audioBuffer
     } catch (err: any) {
       logger.error({ err }, 'Local RVC execution failed')
-      // Cleanup temp files on failure
-      Promise.all([
-          unlink(tempTextPath).catch(() => {}),
-          unlink(tempOutPath).catch(() => {})
-      ])
+      // Cleanup temp file on failure
+      unlink(tempOutPath).catch(() => {})
       return null
     }
   }

@@ -21,9 +21,12 @@ export async function handleQrGenerate(args: QrArgs): Promise<{ success: boolean
 
   try {
     const outPath = join(tmpdir(), `qr_${Date.now()}.png`)
+    // margin 4 = quiet zone sesuai standar QR (min. 4 modul); EC 'H' bikin tahan
+    // artefak kompresi WhatsApp; width besar biar modul tetap kebaca setelah kompresi.
     await QRCode.toFile(outPath, text, {
-      width: 400,
-      margin: 2,
+      width: 600,
+      margin: 4,
+      errorCorrectionLevel: 'H',
       color: { dark: '#000000', light: '#ffffff' },
     })
 

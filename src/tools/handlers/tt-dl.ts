@@ -19,7 +19,10 @@ export async function handleTtDownload(args: TtArgs): Promise<{ success: boolean
 
   try {
     // Using tikwm.com API (free, no auth needed)
-    const response = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`)
+    const response = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`, {
+      signal: AbortSignal.timeout(15000),
+    })
+    if (!response.ok) throw new Error(`tikwm HTTP ${response.status}`)
     const json = await response.json() as any
 
     if (json?.code === 0 && json?.data) {
@@ -32,7 +35,8 @@ export async function handleTtDownload(args: TtArgs): Promise<{ success: boolean
       }
 
       // Download the video
-      const mediaResp = await fetch(videoUrl)
+      const mediaResp = await fetch(videoUrl, { signal: AbortSignal.timeout(30000) })
+      if (!mediaResp.ok) throw new Error(`video HTTP ${mediaResp.status}`)
       const buffer = Buffer.from(await mediaResp.arrayBuffer())
       const outPath = join(tmpdir(), `tiktok_${Date.now()}.mp4`)
       const { writeFile } = await import('fs/promises')

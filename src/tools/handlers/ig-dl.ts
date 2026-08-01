@@ -15,24 +15,28 @@ interface IgArgs {
 
 /** Load cookies from file for authenticated requests */
 async function loadCookies(): Promise<string | null> {
-  const cookieFile = join(config.COOKIES_DIR || 'data/cookies', 'instagram-cookies.txt')
-  if (!existsSync(cookieFile)) return null
-  try {
-    const text = await readFile(cookieFile, 'utf-8')
-    // Strip comments and blank lines, keep only valid cookie lines
-    const lines = text.split('\n').filter(l => l.trim() && !l.startsWith('#') && !l.startsWith('//'))
-    // Parse Netscape format: domain TRUE path secure expiry name value
-    const cookieStr = lines.map(l => {
-      const parts = l.trim().split('\t')
-      if (parts.length >= 7) {
-        return `${parts[5]}=${parts[6]}`
-      }
-      return null
-    }).filter(Boolean).join('; ')
-    return cookieStr || null
-  } catch {
-    return null
+  const cookieFiles = ['instagram.txt', 'instagram-cookies.txt']
+  for (const fileName of cookieFiles) {
+    const cookieFile = join(config.COOKIES_DIR || 'data/cookies', fileName)
+    if (!existsSync(cookieFile)) continue
+    try {
+      const text = await readFile(cookieFile, 'utf-8')
+      // Strip comments and blank lines, keep only valid cookie lines
+      const lines = text.split('\n').filter(l => l.trim() && !l.startsWith('#') && !l.startsWith('//'))
+      // Parse Netscape format: domain TRUE path secure expiry name value
+      const cookieStr = lines.map(l => {
+        const parts = l.trim().split('\t')
+        if (parts.length >= 7) {
+          return `${parts[5]}=${parts[6]}`
+        }
+        return null
+      }).filter(Boolean).join('; ')
+      if (cookieStr) return cookieStr
+    } catch {
+      continue
+    }
   }
+  return null
 }
 
 export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: 'image' | 'video' | 'sticker' | 'audio' | 'document'; caption?: string; error?: string }> {
@@ -43,13 +47,14 @@ export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean
   }
 
   try {
-    // Build headers with cookies if available
-    const headers: Record<string, string> = {
+    // Public downloader API must never receive the user's Instagram session cookie.
+    const publicHeaders: Record<string, string> = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
     }
     const cookies = await loadCookies()
+    const instagramHeaders: Record<string, string> = { ...publicHeaders }
     if (cookies) {
-      headers['Cookie'] = cookies
+      instagramHeaders['Cookie'] = cookies
       logger.info('Using Instagram cookies from file')
     } else {
       logger.warn('No Instagram cookies found — public API only')
@@ -57,7 +62,7 @@ export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean
 
     // Try public Instagram downloader API first
     const apiUrl = `https://api.egojs.com/api/download/instagram?url=${encodeURIComponent(url)}`
-    const response = await fetch(apiUrl, { headers })
+    const response = await fetch(apiUrl, { headers: publicHeaders })
     const data = await response.json() as any
 
     if (data?.result?.media?.[0]) {
@@ -65,7 +70,7 @@ export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean
       const mediaUrl = media.url || media.download_url
 
       if (mediaUrl) {
-        const mediaResp = await fetch(mediaUrl, { headers })
+        const mediaResp = await fetch(mediaUrl, { headers: publicHeaders })
         const buffer = Buffer.from(await mediaResp.arrayBuffer())
         const ext = mediaUrl.includes('.mp4') ? 'mp4' : 'jpg'
         const outPath = join(tmpdir(), `ig_${Date.now()}.${ext}`)
@@ -87,7 +92,7 @@ export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean
       try {
         const igResp = await fetch(`https://www.instagram.com/p/${extractCode(url)}/?__a=1&__d=1`, {
           headers: {
-            ...headers,
+            ...instagramHeaders,
             'Accept': 'application/json',
             'X-Requested-With': 'XMLHttpRequest',
           }
@@ -97,7 +102,7 @@ export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean
         if (items) {
           const mediaUrl = items.video_versions?.[0]?.url || items.display_url
           if (mediaUrl) {
-            const mediaResp = await fetch(mediaUrl, { headers })
+            const mediaResp = await fetch(mediaUrl, { headers: publicHeaders })
             const buffer = Buffer.from(await mediaResp.arrayBuffer())
             const ext = items.video_versions ? 'mp4' : 'jpg'
             const outPath = join(tmpdir(), `ig_${Date.now()}.${ext}`)
