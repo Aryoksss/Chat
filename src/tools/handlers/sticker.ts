@@ -168,7 +168,7 @@ export async function handleSticker(args: StickerArgs, context: any): Promise<{ 
 
     return {
       success: true,
-      text: `Sticker berhasil dibuat! Author: ${author}`,
+      text: `Sticker berhasil dibuat!`,
       filePath: outPath,
       fileType: 'sticker',
       caption: `${author}|${pack}`, // carried through to executor (metadata already in file)
