@@ -31,23 +31,33 @@ function detectImageMime(buf: Buffer): string {
   return 'image/png'
 }
 
-/** Grab an attached or replied-to image from the raw WA message (like sticker tool). */
-async function extractInputImage(context: any): Promise<Buffer | null> {
-  if (!context?.rawMessage || typeof context?.downloadMedia !== 'function') return null
+/** Grab all attached images in a WhatsApp album, or the replied-to image. */
+async function extractInputImages(context: any): Promise<Buffer[]> {
+  if (!context?.rawMessage || typeof context?.downloadMedia !== 'function') return []
+  const raws = Array.isArray(context.rawMessages) && context.rawMessages.length > 0
+    ? context.rawMessages
+    : [context.rawMessage]
+  const results: Buffer[] = []
+  for (const raw of raws) {
+    const directMedia = raw?.message?.imageMessage
+    if (directMedia) {
+      const buffer = await context.downloadMedia(raw)
+      if (buffer) results.push(buffer)
+      continue
+    }
+  }
+  if (results.length > 0) return results
+
   const raw = context.rawMessage
   const quotedInfo = raw?.message?.extendedTextMessage?.contextInfo
   const quotedMsg = quotedInfo?.quotedMessage
 
-  const directMedia = raw?.message?.imageMessage
   const quotedMedia = quotedMsg?.imageMessage
 
-  if (directMedia) {
-    return await context.downloadMedia(raw)
-  }
   if (quotedMedia) {
     // Rebuild a WAMessage pointing AT the quoted media so downloadMediaMessage
     // can locate its url/directPath (the raw command message has no media itself).
-    return await context.downloadMedia({
+    const buffer = await context.downloadMedia({
       key: {
         remoteJid: raw?.key?.remoteJid,
         fromMe: false,
@@ -56,12 +66,13 @@ async function extractInputImage(context: any): Promise<Buffer | null> {
       message: quotedMsg,
       messageTimestamp: raw?.messageTimestamp,
     })
+    return buffer ? [buffer] : []
   }
-  return null
+  return []
 }
 
 /** POST to 9router images API and return the generated image Buffer. */
-async function generateImage(prompt: string, inputImage: Buffer | null): Promise<Buffer> {
+async function generateImage(prompt: string, inputImages: Buffer[]): Promise<Buffer> {
   const baseUrl = config.NINE_ROUTER_BASE_URL.replace(/\/+$/, '')
   const body: Record<string, unknown> = {
     model: IMAGE_MODEL,
@@ -73,12 +84,12 @@ async function generateImage(prompt: string, inputImage: Buffer | null): Promise
     image_detail: 'high',
     output_format: 'png',
   }
-  if (inputImage) {
+  if (inputImages[0]) {
     // NOTE: tested 2026-08-01 — 9router accepts this field (HTTP 200) but
     // IGNORES it for cf/flux-2-klein-9b: the output is a fresh text-to-image
     // generation, not an edit of the input. Kept here in case 9router adds
     // real img2img support later.
-    body.image = `data:${detectImageMime(inputImage)};base64,${inputImage.toString('base64')}`
+    body.image = `data:${detectImageMime(inputImages[0])};base64,${inputImages[0].toString('base64')}`
   }
 
   const controller = new AbortController()
@@ -97,8 +108,8 @@ async function generateImage(prompt: string, inputImage: Buffer | null): Promise
     if (!response.ok) {
       const errText = await response.text().catch(() => '')
       // Fallback for edits: try OpenAI-style /v1/images/edits (multipart form-data).
-      if (inputImage && response.status >= 400 && response.status < 500) {
-        const edited = await tryImageEditsFallback(prompt, inputImage)
+      if (inputImages[0] && response.status >= 400 && response.status < 500) {
+        const edited = await tryImageEditsFallback(prompt, inputImages[0])
         if (edited) return edited
       }
       throw new Error(`9router image API error ${response.status}: ${errText.slice(0, 300)}`)
@@ -202,14 +213,14 @@ function parseCfCredentials(): CfCred[] {
  * Cloudflare Workers AI — the format that actually edits images:
  * multipart FormData with `prompt`, `width`, `height`, `input_image_N`.
  */
-async function generateWithCloudflare(prompt: string, inputImage: Buffer | null, cred: CfCred): Promise<Buffer> {
+async function generateWithCloudflare(prompt: string, inputImages: Buffer[], cred: CfCred): Promise<Buffer> {
   const form = new FormData()
   form.set('prompt', prompt)
   form.set('width', '1024')
   form.set('height', '1024')
-  if (inputImage) {
-    const resized = await resizeForCf(inputImage)
-    form.set('input_image_0', new Blob([new Uint8Array(resized)], { type: 'image/jpeg' }), 'input_0.jpg')
+  for (let index = 0; index < inputImages.length; index++) {
+    const resized = await resizeForCf(inputImages[index])
+    form.set(`input_image_${index}`, new Blob([new Uint8Array(resized)], { type: 'image/jpeg' }), `input_${index}.jpg`)
   }
 
   const url = `https://api.cloudflare.com/client/v4/accounts/${cred.accountId}/ai/run/${config.CF_IMAGE_MODEL}`
@@ -254,7 +265,15 @@ export async function handleImageGen(
   }
 
   try {
-    const inputImage = await extractInputImage(context)
+    const inputImages = await extractInputImages(context)
+    // Keep the edit instruction focused on the requested change. Mention IDs
+    // are WhatsApp metadata, not visual instructions, and can confuse the
+    // image model. Strong preservation constraints also prevent outfit words
+    // such as "maid" from changing the subject's identity or gender.
+    const cleanPrompt = prompt.replace(/@\d{6,20}\b/g, '').replace(/\s+/g, ' ').trim()
+    const editPrompt = inputImages.length > 0
+      ? `Edit input image 0 directly. Preserve the original subject's identity, face, apparent gender, body type, pose, camera angle, lighting, and background. Keep exactly the same person and do not add, remove, or replace people. Change only what the user explicitly requests: ${cleanPrompt}`
+      : cleanPrompt
     const creds = parseCfCredentials()
 
     // Cloudflare direct = satu-satunya yang benar-benar bisa EDIT. Rotasi antar
@@ -270,7 +289,7 @@ export async function handleImageGen(
       let generated: Buffer | null = null
       for (const cred of rotated) {
         try {
-          generated = await generateWithCloudflare(prompt, inputImage, cred)
+          generated = await generateWithCloudflare(editPrompt, inputImages, cred)
           break
         } catch (e: any) {
           errors.push(e.message)
@@ -279,17 +298,17 @@ export async function handleImageGen(
       if (!generated) throw new Error(`Semua akun Cloudflare gagal: ${errors.slice(0, 3).join(' | ')}`)
       buffer = generated
     } else {
-      buffer = await generateImage(prompt, inputImage)
+      buffer = await generateImage(editPrompt, inputImages)
     }
 
     const outPath = join(tmpdir(), `img_${Date.now()}${provider === 'cloudflare' ? '.jpg' : '.png'}`)
     await writeFile(outPath, buffer)
 
-    logger.info({ bytes: buffer.length, mode: inputImage ? 'edit' : 'generate', provider, accounts: creds.length }, 'Image generated/edited')
+    logger.info({ bytes: buffer.length, mode: inputImages.length > 0 ? 'edit' : 'generate', inputImageCount: inputImages.length, provider, accounts: creds.length }, 'Image generated/edited')
 
     return {
       success: true,
-      text: inputImage ? '✅ Gambar berhasil diedit!' : '✅ Gambar berhasil dibuat!',
+      text: inputImages.length > 0 ? '✅ Gambar berhasil diedit!' : '✅ Gambar berhasil dibuat!',
       filePath: outPath,
       fileType: 'image',
     }
