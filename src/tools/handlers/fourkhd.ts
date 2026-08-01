@@ -19,6 +19,13 @@ import { join } from 'path'
 
 type FourkhdPost = { url: string; title: string; size: string | null; photoCount: number | null }
 const searchByJid = new Map<string, { posts: FourkhdPost[]; updatedAt: number }>()
+const detailByJid = new Map<string, {
+  url: string
+  title: string
+  total: number
+  nextFrom: number
+  updatedAt: number
+}>()
 const SEARCH_CONTEXT_TTL_MS = 15 * 60 * 1000
 const DEFAULT_CONTEXT_KEY = '__default__'
 
@@ -261,10 +268,35 @@ export function get4khdContext(jid?: string): string {
   return `Berikut hasil pencarian 4KHD terakhir yang sudah ditampilkan ke user:\n${lines}\n\nKalau user minta buka/kirim salah satu, panggil tool 4khd-detail dengan index = nomor di daftar ini (tanpa isi url), dan download = jumlah foto yang diminta.`
 }
 
+/**
+ * Active detail context for follow-ups such as "lebih banyak 5 lagi".
+ * This is kept separately from the search list because the next photo offset
+ * belongs to the selected post, not to the result list itself.
+ */
+export function get4khdContinuation(jid?: string): {
+  url: string
+  title: string
+  total: number
+  nextFrom: number
+} | null {
+  const key = jid || DEFAULT_CONTEXT_KEY
+  const entry = detailByJid.get(key)
+  if (!entry || Date.now() - entry.updatedAt > SEARCH_CONTEXT_TTL_MS || entry.nextFrom > entry.total) {
+    if (entry) detailByJid.delete(key)
+    return null
+  }
+  return { url: entry.url, title: entry.title, total: entry.total, nextFrom: entry.nextFrom }
+}
+
 /** Hapus hasil pencarian 4khd yang tersimpan (dipanggil saat ada tool 4khd lain). */
 export function clear4khdResults(jid?: string): void {
-  if (jid) searchByJid.delete(jid)
-  else searchByJid.clear()
+  if (jid) {
+    searchByJid.delete(jid)
+    detailByJid.delete(jid)
+  } else {
+    searchByJid.clear()
+    detailByJid.clear()
+  }
 }
 
 interface SearchArgs {
@@ -288,6 +320,7 @@ export async function handleFourkhdSearch(args: SearchArgs, context?: { jid?: st
 
   // Simpan hasil biar 4khd-detail bisa dipanggil dengan `index` tanpa URL.
   searchByJid.set(contextKey(context), { posts, updatedAt: Date.now() })
+  detailByJid.delete(contextKey(context))
 
   const lines = posts.slice(0, 10).map((p, i) => formatPost(p, i + 1))
   const total = posts.length
@@ -312,6 +345,7 @@ export async function handleFourkhdLatest(args: LatestArgs, context?: { jid?: st
 
   // Simpan hasil biar 4khd-detail bisa dipanggil dengan nomor pilihan.
   searchByJid.set(contextKey(context), { posts, updatedAt: Date.now() })
+  detailByJid.delete(contextKey(context))
 
   const lines = posts.slice(0, 10).map((p, i) => formatPost(p, i + 1))
   return {
@@ -386,6 +420,17 @@ export async function handleFourkhdDetail(args: DetailArgs, context?: { jid?: st
 
   const wantDownload = normalizeDownload(args.download)
   const fromIndex = toPositiveInt(args.from, 1) - 1
+  const detailTitle = processTitle(detail.title, chosen)
+
+  // Remember the selected post and the next photo offset for follow-up
+  // requests, e.g. "kirim lebih banyak 5 lagi".
+  detailByJid.set(contextKey(context), {
+    url,
+    title: detailTitle,
+    total: images.length,
+    nextFrom: Math.max(1, fromIndex + 1),
+    updatedAt: Date.now(),
+  })
 
   // Mode download: kirim 1..N foto (mulai dari foto `from`).
   if (wantDownload > 0) {
@@ -402,13 +447,20 @@ export async function handleFourkhdDetail(args: DetailArgs, context?: { jid?: st
     }
     const firstNum = fromIndex + 1
     const lastNum = fromIndex + filePaths.length
-    const nextHint = `${processTitle(detail.title, chosen)} — kirim foto ${lastNum + 1}..${Math.min(lastNum + wantDownload, total)} kalau mau lanjut.`
+    detailByJid.set(contextKey(context), {
+      url,
+      title: detailTitle,
+      total,
+      nextFrom: lastNum + 1,
+      updatedAt: Date.now(),
+    })
+    const nextHint = `${detailTitle} — kirim foto ${lastNum + 1}..${Math.min(lastNum + wantDownload, total)} kalau mau lanjut.`
     return {
       success: true,
-      text: `🖼️ *${processTitle(detail.title, chosen)}* — ${filePaths.length} foto terkirim (${firstNum}-${lastNum} dari ${total}). ${nextHint}`,
+      text: `🖼️ *${detailTitle}* — ${filePaths.length} foto terkirim (${firstNum}-${lastNum} dari ${total}). ${nextHint}`,
       filePaths,
       fileType: 'image',
-      caption: `${firstNum}-${lastNum}/${total} • ${processTitle(detail.title, chosen)}`,
+      caption: `${firstNum}-${lastNum}/${total} • ${detailTitle}`,
     }
   }
 
@@ -419,7 +471,7 @@ export async function handleFourkhdDetail(args: DetailArgs, context?: { jid?: st
   return {
     success: true,
     text:
-      `🖼️ *${processTitle(detail.title, chosen)}*\n` +
+      `🖼️ *${detailTitle}*\n` +
       `Total: ${images.length} foto${detail.postId ? ` • ID: ${detail.postId}` : ''}\n\n` +
       `${urlLines}${more}\n\n` +
       `Mau kirim fotonya? Pakai *4khd-detail* dengan download=N (misal download=5) buat kirim N foto.`,
