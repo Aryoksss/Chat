@@ -7,14 +7,15 @@
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "tsx --test tests/*.test.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.5.0",
+    "@itsliaaa/baileys": "^0.3.18-final",
     "dotenv": "^17.4.2",
+    "node-cache": "^5.1.2",
     "pino": "^10.3.1",
     "pino-pretty": "^13.1.3",
     "qrcode": "^1.5.4",
