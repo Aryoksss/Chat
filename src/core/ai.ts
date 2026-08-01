@@ -18,6 +18,28 @@ interface ChatResponse {
   toolCalls: AIToolCall[]
 }
 
+/** Remove private reasoning tags that some OpenAI-compatible models leak. */
+export function stripHiddenReasoning(text: string): string {
+  if (!text) return ''
+
+  let cleaned = text.replace(
+    /<(think|thinking|analysis)\b[^>]*>[\s\S]*?<\/\1>/gi,
+    '',
+  )
+
+  // If a provider sends an unterminated reasoning block, never expose the
+  // remainder of that block to the user.
+  const openTag = cleaned.search(/<(think|thinking|analysis)\b[^>]*>/i)
+  if (openTag >= 0) cleaned = cleaned.slice(0, openTag)
+
+  return cleaned
+    .replace(/<\/(think|thinking|analysis)\s*>/gi, '')
+    // Some models emit tone metadata as visible bracket markers.
+    .replace(/\[(?:joking|teasing|playful|sarcasm|laughing)\]/gi, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim()
+}
+
 // Retry config
 const MAX_RETRIES = 3
 const BASE_DELAY_MS = 1000
@@ -283,7 +305,7 @@ export class AIBridge {
 
       // If AI responds with text, accumulate it
       if (response.content) {
-        finalText = response.content
+        finalText = stripHiddenReasoning(response.content)
       }
 
       // If no tool calls, we're done
@@ -463,7 +485,7 @@ export class AIBridge {
 
     try {
       const response = await this.chat({ messages, model: this.defaultModel })
-      return response.content || '(summarize failed)'
+      return stripHiddenReasoning(response.content || '(summarize failed)')
     } catch {
       return text.length > 500 ? text.substring(0, 500) + '...' : text
     }
@@ -476,7 +498,7 @@ export class AIBridge {
       { role: 'user', content: userMessage },
     ]
     const response = await this.chat({ messages })
-    return (response.content as string) || ''
+    return stripHiddenReasoning((response.content as string) || '')
   }
 }
 
