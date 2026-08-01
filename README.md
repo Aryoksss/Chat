@@ -254,3 +254,7 @@ Aturan tersebut sudah tersedia di `.gitignore`. Jika sebuah credential pernah te
 - Cookie gagal: export ulang cookie Netscape dan pastikan nama file sesuai daftar di atas.
 - Tool gambar gagal: periksa `CF_ACCOUNT_ID`, `CF_API_KEY`, atau `CF_ACCOUNTS`.
 - Bot tidak merespons grup: gunakan command, mention bot, atau reply pesan bot.
+
+## Kolaborasi
+
+Project ini dikembangkan oleh Aryoksss dengan bantuan ChatGPT.
