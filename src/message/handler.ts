@@ -11,13 +11,17 @@ import { memoryManager, memoryScope } from '../memory/manager.js'
 import { cmdHandler } from '../system/cmd-handler.js'
 import { toolExecutor } from '../tools/executor.js'
 import { audioManager } from '../audio/manager.js'
-import { get4khdContext } from '../tools/handlers/fourkhd.js'
+import { get4khdContext, get4khdContinuation } from '../tools/handlers/fourkhd.js'
 import { getAnimeContext } from '../tools/handlers/anime-dl.js'
+import { archiveIncomingSticker, getStickerPoolContext, isStickerInPool, promoteStickerToPool } from '../stickers/archive.js'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { writeFile, unlink } from 'fs/promises'
 import type { AIMessage, IncomingMessage, PersonaConfig } from '../core/types.js'
 import type { WhatsAppClient } from '../core/client.js'
+import { botDatabase } from '../storage/database.js'
+import { mediaJobManager } from '../jobs/media-jobs.js'
+import { formatReminderTime } from '../reminders/parser.js'
 
 // ---- Rate Limiter Config ----
 const RATE_LIMIT_WINDOW_MS = 10_000       // 10 detik
@@ -51,6 +55,12 @@ interface JidState {
   pendingCommand?: { command: string; ask: string } | null
 }
 
+interface ImageAlbumState {
+  sender: string
+  startedAt: number
+  rawMessages: any[]
+}
+
 function hasCommandPrefix(text: string): boolean {
   const normalized = (text || '').trim()
   return config.PREFIXES.some(prefix => normalized.startsWith(prefix))
@@ -67,6 +77,7 @@ export class MessageHandler {
   private personas = new Map<'owner' | 'group', PersonaConfig>()
   private jidStates = new Map<string, JidState>()
   private conversationHistory = new Map<string, ConversationState>()
+  private imageAlbums = new Map<string, ImageAlbumState>()
   private acceptingMessages = true
 
   setPersonas(personas: Map<'owner' | 'group', PersonaConfig>): void {
@@ -152,6 +163,11 @@ export class MessageHandler {
   /** Push pesan ke queue per-JID */
   private enqueue(msg: IncomingMessage, client: WhatsAppClient): void {
     const state = this.getJidState(msg.jid)
+    if (!msg.mediaJobId) {
+      const tool = this.detectQueuedMediaTool(msg)
+      const job = tool ? mediaJobManager.queue(tool, msg.jid, msg.participant || msg.sender) : null
+      if (job) msg.mediaJobId = job.id
+    }
     state.queue.push({ msg, client, timestamp: Date.now() })
 
     if (!state.processing) {
@@ -166,10 +182,15 @@ export class MessageHandler {
 
     while (state.queue.length > 0) {
       const item = state.queue.shift()!
+      if (item.msg.mediaJobId && botDatabase.isMediaJobCancelled(item.msg.mediaJobId)) continue
       try {
         await this.processMessage(item.msg, item.client)
       } catch (err: any) {
         logger.error({ err, jid }, 'Queue processing error')
+      } finally {
+        if (item.msg.mediaJobId && botDatabase.mediaJobStatus(item.msg.mediaJobId) === 'queued') {
+          botDatabase.updateMediaJob(item.msg.mediaJobId, 'failed', 'Permintaan tidak mencapai tool media')
+        }
       }
 
       // Jeda antar pesan biar gak kelihatan spam
@@ -191,11 +212,52 @@ export class MessageHandler {
     // Debug log before routing
     logger.info({ sender: msg.sender, ownerEnv: config.OWNER_NUMBER }, 'DEBUG: Entering router')
 
+    // Archive incoming stickers before routing. This intentionally also runs
+    // for groups outside the allowlist, so the pool can collect stickers from
+    // every group the account belongs to without making the bot respond there.
+    let stickerReactionContext: string | null = null
+    if (msg.messageType === 'sticker') {
+      try {
+        const stickerBuffer = await client.downloadMedia(msg.raw)
+        if (stickerBuffer) {
+          const source = msg.isGroup ? 'group' : 'owner'
+          const filePath = await archiveIncomingSticker(stickerBuffer, source)
+          logger.info({ source, filePath }, 'Incoming sticker archived')
+          if (!(await isStickerInPool(filePath))) {
+            const analysis = await aiBridge.analyzeSticker(stickerBuffer)
+            if (analysis) {
+              const poolPath = await promoteStickerToPool(filePath, analysis, source)
+              stickerReactionContext = [...analysis.tags, analysis.description].join(' ')
+              logger.info({ source, poolPath, tags: analysis.tags, description: analysis.description }, 'Sticker analyzed and added to contextual pool')
+            }
+          } else {
+            stickerReactionContext = await getStickerPoolContext(filePath)
+          }
+        }
+      } catch (err: any) {
+        logger.warn({ err: err.message, jid: msg.jid }, 'Failed to archive incoming sticker')
+      }
+
+      // A sticker without caption is an archive event, not an AI prompt. Do
+      // not send an empty user message to the model (which can yield malformed
+      // or empty provider responses).
+      if (!msg.text?.trim() && !msg.isReplyToBot) return
+    }
+
     // 1. Route dulu
     const personaType = router.route(msg.jid, msg.sender, msg.isGroup)
     if (!personaType) {
-      logger.info('DEBUG: Router returned null (ignored message)')
+      logger.info({ jid: msg.jid, isGroup: msg.isGroup, sender: msg.sender }, 'DEBUG: Router returned null (ignored message)')
       return
+    }
+
+    if (msg.isGroup) {
+      botDatabase.upsertMember(
+        msg.jid,
+        msg.participant || msg.sender,
+        msg.displayName || msg.raw?.pushName || '',
+        msg.text || `[${msg.messageType}]`,
+      )
     }
 
     // 1b. Ignore empty messages (no text, no media, not a sticker/audio)
@@ -213,14 +275,19 @@ export class MessageHandler {
     // (which both annoys members and overloads Baileys' USync → "Waiting for this message").
     if (msg.isGroup) {
       const isCommand = hasCommandPrefix(msg.text || '')
+      const album = this.imageAlbums.get(msg.jid)
+      const isAlbumContinuation = Boolean(
+        msg.messageType === 'image' && !msg.text?.trim() && album &&
+        album.sender === msg.sender && Date.now() - album.startedAt <= 5000
+      )
       // STRICT: bot only replies when actually addressed — mentioned, replied
-      // to, a command, or an image. The owner no longer talks freely here; they
-      // must @mention the bot (mentioning the owner counts) or use a command.
+      // to, or given a command. An image by itself is not an address; this
+      // prevents the bot from responding to every photo sent in the group.
       const isAddressed =
         msg.isBotMentioned ||
         msg.isReplyToBot ||
         isCommand ||
-        msg.messageType === 'image'   // forwarded media for processing
+        isAlbumContinuation
       if (!isAddressed) {
         logger.info({
           jid: msg.jid,
@@ -231,9 +298,42 @@ export class MessageHandler {
           isCommand,
           ownerNumber: config.OWNER_NUMBER,
           botMentionSource: msg.raw?.message?.extendedTextMessage?.contextInfo?.mentionedJid,
+          quotedParticipant: msg.raw?.message?.extendedTextMessage?.contextInfo?.participant,
+          quotedStanzaId: msg.raw?.message?.extendedTextMessage?.contextInfo?.stanzaId,
         }, 'Group message ignored (not addressed to bot)')
         return
       }
+
+      if (isAlbumContinuation) {
+        album!.rawMessages.push(msg.raw)
+        return
+      }
+    }
+
+    if (await this.handleMemberDirectoryCommand(msg, client)) return
+    if (await this.handleMediaJobCommand(msg, client)) return
+    if (await this.handleReminderManagementCommand(msg, client)) return
+
+    // A sticker reply to the bot is a reaction request. Use the sticker's
+    // semantic metadata as context and answer with the closest pool sticker.
+    if (msg.messageType === 'sticker' && !msg.text?.trim() && msg.isReplyToBot && stickerReactionContext) {
+      const toolContext = {
+        sock: client.sock,
+        jid: msg.jid,
+        participant: msg.participant,
+        rawMessage: msg.raw,
+        mediaJobId: msg.mediaJobId,
+        suppressTextResponse: false,
+      }
+      await toolExecutor.executeToolCall('sticker-pool', { context: stickerReactionContext }, toolContext)
+      return
+    }
+    if (msg.messageType === 'sticker' && !msg.text?.trim()) return
+
+    // The first image carries the caption/mention; following album images
+    // usually arrive as separate captionless messages.
+    if (msg.messageType === 'image' && msg.text?.trim()) {
+      this.imageAlbums.set(msg.jid, { sender: msg.sender, startedAt: Date.now(), rawMessages: [msg.raw] })
     }
 
     // 2. Rate limit check
@@ -297,12 +397,19 @@ export class MessageHandler {
 
     logger.info({ persona: personaType, text: msg.text?.slice(0, 60) }, `${logPrefix} processing`)
 
+    const albumMessages = await this.collectImageAlbum(msg)
+
     // Quick local menu command before routing to AI/persona flow
     const localCommandParts = getCommandParts(commandText)
     const localCommand = localCommandParts?.rest.split(/\s+/)[0]
-    if (localCommand === 'menu' || localCommand === 'help' || localCommand === 'commands' || localCommand === 'helper') {
-      const systemCommand = localCommand === 'helper' ? '/helper' : '/menu'
-      const handled = await cmdHandler.handle({ ...msg, text: systemCommand }, client)
+    if (
+      localCommand === 'menu' ||
+      localCommand === 'help' ||
+      localCommand === 'commands' ||
+      localCommand === 'helper' ||
+      localCommand?.startsWith('menu-')
+    ) {
+      const handled = await cmdHandler.handle(msg, client)
       if (handled) return
     }
 
@@ -312,10 +419,49 @@ export class MessageHandler {
       if (handled) return
     }
 
+    // Owner can also approve/reject a group by its exact known name without
+    // relying on the AI or manually copying a Group ID.
+    if (personaType === 'owner') {
+      const handled = await cmdHandler.handleOwnerGroupAccess(msg, client)
+      if (handled) return
+    }
+
+    if (this.isReminderRequest(msg.text)) {
+      const toolContext = {
+        sock: client.sock,
+        jid: msg.jid,
+        participant: msg.participant,
+        rawMessage: msg.raw,
+        mediaJobId: msg.mediaJobId,
+        suppressTextResponse: false,
+      }
+      const result = await toolExecutor.executeToolCall('reminder', { request: msg.text }, toolContext)
+      if (result.trim()) await client.sendText(msg.jid, result, msg.raw)
+      return
+    }
+
     // Prefix command fallback (.st, .yt, dll)
     if (hasCommandPrefix(msg.text || '')) {
       const handled = await this.handlePrefixCommand(msg, client)
       if (handled) return
+    }
+
+    // Direct sticker requests should not depend on the model choosing a tool
+    // call. Implicit emotional reactions remain AI-controlled to avoid spam.
+    if (this.isDirectStickerRequest(msg.text)) {
+      const toolContext = {
+        sock: client.sock,
+        jid: msg.jid,
+        participant: msg.participant,
+        rawMessage: msg.raw,
+        mediaJobId: msg.mediaJobId,
+        suppressTextResponse: false,
+      }
+      await client.sendPresence(msg.jid, 'composing')
+      const result = await toolExecutor.executeToolCall('sticker-pool', { context: msg.text }, toolContext)
+      if (toolContext.suppressTextResponse) return
+      if (result.trim()) await client.sendText(msg.jid, result, msg.raw)
+      return
     }
 
     // A bare Instagram URL is an explicit download request. Route it directly
@@ -329,6 +475,8 @@ export class MessageHandler {
         participant: msg.participant,
         downloadMedia: async (m: any) => client.downloadMedia(m),
         rawMessage: msg.raw,
+        rawMessages: albumMessages,
+        mediaJobId: msg.mediaJobId,
         suppressTextResponse: false,
       }
       await client.sendPresence(msg.jid, 'composing')
@@ -338,6 +486,58 @@ export class MessageHandler {
           { url: directDownload.url },
           toolContext,
         )
+        if (result && result.trim() && !toolContext.suppressTextResponse) {
+          await client.sendText(msg.jid, result, msg.raw)
+        }
+      } catch (err: any) {
+        await client.sendText(msg.jid, `❌ Error: ${err.message}`, msg.raw)
+      }
+      return
+    }
+
+    // 4KHD follow-ups are deterministic and should not depend on the model
+    // remembering numeric selections or the next photo offset. Handle common
+    // requests locally: "kirim no 6, 3 foto", "kirim no 6", and
+    // "kirim lebih banyak 5 lagi".
+    const fourkhdRequest = this.parseFourkhdRequest(msg.text, msg.jid)
+    if (fourkhdRequest) {
+      logger.info({ jid: msg.jid, args: fourkhdRequest }, 'Auto-routing 4KHD continuation')
+      const toolContext = {
+        sock: client.sock,
+        jid: msg.jid,
+        participant: msg.participant,
+        rawMessage: msg.raw,
+        mediaJobId: msg.mediaJobId,
+        suppressTextResponse: false,
+      }
+      await client.sendPresence(msg.jid, 'composing')
+      try {
+        const result = await toolExecutor.executeToolCall('4khd-detail', fourkhdRequest, toolContext)
+        if (result && result.trim() && !toolContext.suppressTextResponse) {
+          await client.sendText(msg.jid, result, msg.raw)
+        }
+      } catch (err: any) {
+        await client.sendText(msg.jid, `❌ Error: ${err.message}`, msg.raw)
+      }
+      return
+    }
+
+    // Explicit website requests should not depend on the model deciding to call
+    // web-fetch. This also accepts bare domains such as "aryoks.tech".
+    const directWebFetch = this.getDirectWebFetchCommand(msg.text)
+    if (directWebFetch) {
+      const toolContext = {
+        sock: client.sock,
+        jid: msg.jid,
+        participant: msg.participant,
+        rawMessage: msg.raw,
+        rawMessages: albumMessages,
+        mediaJobId: msg.mediaJobId,
+        suppressTextResponse: false,
+      }
+      await client.sendPresence(msg.jid, 'composing')
+      try {
+        const result = await toolExecutor.executeToolCall('web-fetch', { url: directWebFetch.url }, toolContext)
         if (result && result.trim() && !toolContext.suppressTextResponse) {
           await client.sendText(msg.jid, result, msg.raw)
         }
@@ -360,6 +560,8 @@ export class MessageHandler {
         participant: msg.participant,
         downloadMedia: async (m: any) => client.downloadMedia(m),
         rawMessage: msg.raw,
+        rawMessages: albumMessages,
+        mediaJobId: msg.mediaJobId,
       }
       const result = await toolExecutor.executeToolCall('img-gen', { prompt: msg.text || '' }, toolContext)
       if (result.startsWith('✅') || result.startsWith('❌')) {
@@ -403,6 +605,20 @@ export class MessageHandler {
       systemPrompt += `\n## KONTEKS AKTIF — ANIME\n${animeCtx}\n`
     }
 
+    if (msg.isGroup) {
+      const members = botDatabase.memberContext(msg.jid)
+      if (members) {
+        systemPrompt += `\n## DIREKTORI ANGGOTA GRUP\n${members}\nGunakan nama anggota jika diketahui. Jangan tampilkan ID internal kecuali diminta. Jangan mengarang hubungan atau identitas yang belum tercatat.\n`
+      }
+      if (msg.quotedParticipant) {
+        const quotedDigits = msg.quotedParticipant.replace(/[^0-9]/g, '')
+        const quotedMember = botDatabase.findMembers(msg.jid, quotedDigits, 1)[0]
+        if (quotedMember?.displayName) {
+          systemPrompt += `\nPesan yang sedang dibalas berasal dari anggota bernama ${quotedMember.displayName}. Ini metadata internal; jangan echo ID-nya.\n`
+        }
+      }
+    }
+
     // Sender identity so the AI knows who it's talking to (name from pushName if
     // available, otherwise the phone number).
     const senderName = msg.raw?.pushName?.trim() || msg.sender
@@ -421,16 +637,18 @@ export class MessageHandler {
     // If message is an image, process it for Vision AI
     if (msg.messageType === 'image') {
       try {
-        const buffer = await client.downloadMedia(msg.raw)
-        if (buffer) {
-          const base64 = buffer.toString('base64')
-          const mimeType = 'image/jpeg'
+        const buffers: Buffer[] = []
+        for (const raw of albumMessages) {
+          const buffer = await client.downloadMedia(raw)
+          if (buffer) buffers.push(buffer)
+        }
+        if (buffers.length > 0) {
           const imageNote = msg.text
-            ? `${msg.text}\n\n[Ada lampiran gambar di pesan ini. Amati gambarnya dan balas dalam konteks teks di atas.]`
-            : '[User mengirimkan sebuah gambar. AMATI dan ANALISIS gambar ini: jelaskan apa isinya, objek, suasana, dan detail yang terlihat, lalu respons natural sesuai konteks/personamu.]'
+            ? `${msg.text}\n\n[Ada ${buffers.length} lampiran gambar dalam satu permintaan. Amati SEMUA gambar dan gunakan sesuai urutan foto 1, foto 2, dst.]`
+            : `[User mengirimkan ${buffers.length} gambar. AMATI dan ANALISIS SEMUA gambar secara berurutan, lalu respons natural sesuai konteks/personamu.]`
           userContent = [
             { type: 'text', text: imageNote },
-            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } }
+            ...buffers.map(buffer => ({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${buffer.toString('base64')}` } })),
           ]
         }
       } catch (err) {
@@ -493,6 +711,8 @@ export class MessageHandler {
         participant: msg.participant,
         downloadMedia: async (m: any) => client.downloadMedia(m),
         rawMessage: msg.raw, // Allow tools (like sticker maker) to access the raw message directly
+        rawMessages: albumMessages,
+        mediaJobId: msg.mediaJobId,
         suppressTextResponse: false,
       }
       const handlerMap = toolExecutor.createHandlerMap(toolContext)
@@ -507,6 +727,27 @@ export class MessageHandler {
 
       if (toolContext.suppressTextResponse) {
         return
+      }
+
+      // NO_REPLY is an internal tool-protocol marker, never a user-facing
+      // WhatsApp message. Media tools may legitimately finish without text.
+      if (/^NO_REPLY$/i.test((response || '').trim())) {
+        logger.warn({ jid: msg.jid }, 'AI returned internal NO_REPLY marker; suppressing it')
+        return
+      }
+
+      // Natural reactions can trigger a contextual sticker without an explicit
+      // "kirim sticker" command. Keep this conservative to avoid sticker spam.
+      const autoStickerContext = this.getAutoStickerContext(msg)
+      if (autoStickerContext) {
+        const stickerContext = {
+          sock: client.sock,
+          jid: msg.jid,
+          participant: msg.participant,
+          rawMessage: msg.raw,
+          suppressTextResponse: false,
+        }
+        await toolExecutor.executeToolCall('sticker-pool', { context: autoStickerContext }, stickerContext)
       }
 
       if (response?.trim()) {
@@ -600,6 +841,141 @@ export class MessageHandler {
     return true
   }
 
+  private async handleMemberDirectoryCommand(msg: IncomingMessage, client: WhatsAppClient): Promise<boolean> {
+    if (!msg.isGroup) return false
+    const parts = getCommandParts(msg.text || '')
+    if (!parts) return false
+    const [command, ...args] = parts.rest.split(/\s+/)
+    const normalized = command?.toLowerCase()
+    if (normalized === 'panggil-aku' || normalized === 'namaku') {
+      const name = args.join(' ').trim()
+      if (name.length < 2 || name.length > 40) {
+        await client.sendText(msg.jid, 'Format: .panggil-aku <nama>, maksimal 40 karakter.', msg.raw)
+        return true
+      }
+      botDatabase.setMemberName(msg.jid, msg.participant || msg.sender, name)
+      await client.sendText(msg.jid, `Sip, aku akan mengenalmu sebagai ${name}.`, msg.raw)
+      return true
+    }
+    if (!['anggota', 'members', 'siapa'].includes(normalized)) return false
+
+    const query = args.join(' ').trim()
+    const members = query
+      ? botDatabase.findMembers(msg.jid, query, 10)
+      : botDatabase.listMembers(msg.jid, 30)
+    if (members.length === 0) {
+      await client.sendText(msg.jid, query ? `Belum mengenal anggota "${query}".` : 'Belum ada anggota yang tercatat.', msg.raw)
+      return true
+    }
+    const lines = members.map((member, index) => {
+      const name = member.displayName || 'Nama belum diketahui'
+      return `${index + 1}. ${name} — @${member.normalizedId} (${member.messageCount} pesan)`
+    })
+    await client.sendText(msg.jid, `👥 *Anggota yang dikenal*\n\n${lines.join('\n')}`, msg.raw)
+    return true
+  }
+
+  private detectQueuedMediaTool(msg: IncomingMessage): string | null {
+    const parts = getCommandParts(msg.text || '')
+    if (parts) {
+      const command = parts.rest.split(/\s+/)[0]?.toLowerCase()
+      const tool = PREFIX_MAP[command]
+      if (tool && mediaJobManager.isMediaTool(tool)) return tool
+    }
+    if (this.isImageEditRequest(msg)) return 'img-gen'
+    return this.getDirectDownloadCommand(msg.text)?.toolName || null
+  }
+
+  private async handleMediaJobCommand(msg: IncomingMessage, client: WhatsAppClient): Promise<boolean> {
+    const parts = getCommandParts(msg.text || '')
+    if (!parts) return false
+    const [command, id] = parts.rest.split(/\s+/)
+    if (command?.toLowerCase() === 'jobs') {
+      await client.sendText(msg.jid, mediaJobManager.format(msg.jid), msg.raw)
+      return true
+    }
+    if (command?.toLowerCase() === 'cancel') {
+      const cancelled = mediaJobManager.cancel(msg.jid, msg.participant || msg.sender, id && id.toLowerCase() !== 'all' ? id : undefined)
+      await client.sendText(msg.jid, cancelled > 0 ? `🚫 ${cancelled} job dibatalkan.` : 'Tidak ada job aktif yang cocok.', msg.raw)
+      return true
+    }
+    return false
+  }
+
+  private isReminderRequest(text: string): boolean {
+    return /\b(ingatkan|reminder(?:kan)?|jangan\s+lupa(?:kan)?)\b/i.test(text || '')
+  }
+
+  private async handleReminderManagementCommand(msg: IncomingMessage, client: WhatsAppClient): Promise<boolean> {
+    const parts = getCommandParts(msg.text || '')
+    if (!parts) return false
+    const [command, id] = parts.rest.split(/\s+/)
+    const normalized = command?.toLowerCase()
+    if (normalized === 'reminders' || normalized === 'pengingat') {
+      const reminders = botDatabase.listReminders(msg.jid)
+      if (reminders.length === 0) {
+        await client.sendText(msg.jid, 'Tidak ada pengingat aktif.', msg.raw)
+        return true
+      }
+      const lines = reminders.map(reminder =>
+        `⏰ ${reminder.id} · ${formatReminderTime(reminder.dueAt)}${reminder.recurrence ? ' · berulang' : ''}\n   ${reminder.task}`
+      )
+      await client.sendText(msg.jid, `*Pengingat aktif*\n\n${lines.join('\n\n')}\n\nBatalkan: .cancel-reminder <id>`, msg.raw)
+      return true
+    }
+    if (normalized === 'cancel-reminder' || normalized === 'hapus-pengingat') {
+      if (!id) {
+        await client.sendText(msg.jid, 'Format: .cancel-reminder <id>', msg.raw)
+        return true
+      }
+      const cancelled = botDatabase.cancelReminder(msg.jid, msg.participant || msg.sender, id)
+      await client.sendText(msg.jid, cancelled > 0 ? `🚫 Pengingat ${id} dibatalkan.` : 'Pengingat tidak ditemukan.', msg.raw)
+      return true
+    }
+    return false
+  }
+
+  private isDirectStickerRequest(text: string): boolean {
+    return /\b(sticker|stiker)\b/i.test(text || '') &&
+      /\b(kirim|kirimkan|pakai|balas|jawab|minta|kasih|dong|please)\b/i.test(text || '')
+  }
+
+  private getAutoStickerContext(msg: IncomingMessage): string | null {
+    if (msg.isGroup && !msg.isBotMentioned && !msg.isReplyToBot && !hasCommandPrefix(msg.text || '')) return null
+    if (msg.messageType !== 'text' || !msg.text?.trim()) return null
+    if (hasCommandPrefix(msg.text)) return null
+    if (/https?:\/\/|\b(sticker|stiker|gambar|foto|edit|bikin|buat)\b/i.test(msg.text)) return null
+
+    // Expand common chat slang into the semantic tags used by index.json.
+    // This keeps automatic reactions contextual without requiring a command.
+    const expansions: Array<[RegExp, string]> = [
+      [/\b(lucu|ngakak|ketawa|wkwk|haha|kocak|🤣|😂)\b/i, 'lucu kocak bercanda'],
+      [/\b(sedih|nangis|kecewa|galau|😭|😢)\b/i, 'sedih nangis kecewa'],
+      [/\b(kangen|rindu|sayang|cinta)\b/i, 'kangen sayang cinta'],
+      [/\b(marah|kesel|sebel|emosi)\b/i, 'marah kesal'],
+      [/\b(capek|lelah|pusing|bingung)\b/i, 'capek bingung'],
+      [/\b(kaget|shock|serius)\b/i, 'kaget shock'],
+      [/\b(setuju|mantap|makasih|terima kasih|selamat|sukses)\b/i, 'setuju mantap'],
+      [/\b(malu|takut|gagal)\b/i, 'malu takut gagal'],
+    ]
+    const matched = expansions.filter(([pattern]) => pattern.test(msg.text)).map(([, value]) => value)
+    // Only trigger an automatic sticker when the message clearly expresses a
+    // reaction. Ordinary requests such as "kasih listnya" must remain text
+    // only; otherwise every addressed AI conversation gets an unsolicited
+    // sticker after the response.
+    return matched.length > 0 ? `${msg.text} ${matched.join(' ')}` : null
+  }
+
+  private async collectImageAlbum(msg: IncomingMessage): Promise<any[]> {
+    if (msg.messageType !== 'image') return [msg.raw]
+    // Give subsequent album messages time to arrive before consuming the batch.
+    await this.sleep(2500)
+    const album = this.imageAlbums.get(msg.jid)
+    if (!album || album.sender !== msg.sender) return [msg.raw]
+    this.imageAlbums.delete(msg.jid)
+    return album.rawMessages
+  }
+
   /** Pertanyaan yang diajukan bot saat user menekan row menu ber-argumen. */
   private placeholderAsk(command: string): string | null {
     switch (command) {
@@ -664,6 +1040,7 @@ export class MessageHandler {
       participant: msg.participant,
       downloadMedia: async (m: any) => client.downloadMedia(m),
       rawMessage: msg.raw, // Allow tools (like sticker maker) to read the replied image
+      mediaJobId: msg.mediaJobId,
       suppressTextResponse: false,
     }
 
@@ -707,10 +1084,53 @@ export class MessageHandler {
     return null
   }
 
+  private getDirectWebFetchCommand(text: string): { url: string } | null {
+    const value = (text || '').trim()
+    if (!/\b(cari|cek|buka|lihat|baca|kunjungi|visit|porto|portofolio)\b/i.test(value)) return null
+
+    // Match both https://aryoks.tech and bare domains. Trim punctuation commonly
+    // attached to a URL in chat, but keep its path/query if present.
+    const match = value.match(/(?:https?:\/\/)?(?:www\.)?[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(?:\/[^\s]*)?/i)
+    if (!match) return null
+
+    const url = match[0].replace(/[),.!?;:]+$/, '')
+    return { url: /^https?:\/\//i.test(url) ? url : `https://${url}` }
+  }
+
+  private parseFourkhdRequest(text: string, jid: string): { index?: number; url?: string; download: number; from?: number } | null {
+    const value = (text || '').trim()
+    if (!value || !/\b(kirim|kirimkan|kasih|ambil|lanjut|lebih\s+banyak|lagi)\b/i.test(value)) return null
+
+    const active = get4khdContinuation(jid)
+    const searchContext = get4khdContext(jid)
+    const numbered = [...value.matchAll(/\b(?:no|nomor)\s*(\d+)\b/gi)].map(match => Number(match[1]))
+    const postIndex = numbered[0]
+    if (!postIndex && !active) return null
+    if (postIndex && !searchContext && !active) return null
+
+    const photoCountMatch = value.match(/\b(\d+)\s*(?:foto|fotonya|lagi)\b/i)
+    let download = photoCountMatch ? Number(photoCountMatch[1]) : 0
+    // Handles: "kirim yang no 6, kirim no 3 aja".
+    if (!download && numbered.length > 1) download = numbered[1]
+    if (!download && /\b(lanjut|lebih\s+banyak|lagi)\b/i.test(value)) download = 1
+    if (!download) download = 1
+    if (!Number.isFinite(download) || download < 1) return null
+
+    if (postIndex) return { index: postIndex, download: Math.min(Math.floor(download), 20) }
+    if (!active) return null
+    return {
+      url: active.url,
+      download: Math.min(Math.floor(download), 20),
+      from: active.nextFrom,
+    }
+  }
+
   private parseCommandArgs(command: string, args: string[], msg: IncomingMessage): Record<string, unknown> {
     const parsed: Record<string, unknown> = {}
     switch (command) {
       case 's': case 'st': case 'sticker': parsed.imageType = 'reply'; break
+      case 'smeme': parsed.text = args.join(' '); break
+      case 'sp': case 'sticker-pool': parsed.context = args.join(' '); break
       case 'yt': case 'youtube': parsed.url = args[0] || ''; parsed.format = args.includes('--audio') || args.includes('-a') ? 'audio' : 'video'; break
       case 'ig': case 'instagram': parsed.url = args[0] || ''; break
       case 'tt': case 'tiktok': parsed.url = args[0] || ''; break
@@ -733,7 +1153,8 @@ export class MessageHandler {
 }
 
 const PREFIX_MAP: Record<string, string> = {
-  's': 'sticker', 'st': 'sticker', 'sticker': 'sticker',
+  's': 'sticker', 'st': 'sticker', 'sticker': 'sticker', 'smeme': 'smeme',
+  'sp': 'sticker-pool', 'sticker-pool': 'sticker-pool',
   'yt': 'yt-dl', 'youtube': 'yt-dl',
   'ig': 'ig-dl', 'instagram': 'ig-dl',
   'tt': 'tt-dl', 'tiktok': 'tt-dl',

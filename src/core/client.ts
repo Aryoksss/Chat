@@ -3,20 +3,28 @@
 // ============================================================
 // Handles: connect, reconnect, QR login, session persist, events
 
-import { makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage, makeCacheableSignalKeyStore, makeInMemoryStore } from '@itsliaaa/baileys'
+import { makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage, makeCacheableSignalKeyStore, makeInMemoryStore, normalizeMessageContent } from '@itsliaaa/baileys'
 import { Boom } from '@hapi/boom'
 import pino from 'pino'
 import QRCode from 'qrcode'
 import NodeCache from 'node-cache'
-import { readdir } from 'fs/promises'
-import { join } from 'path'
+import { mkdir, readFile, readdir, writeFile } from 'fs/promises'
+import { dirname, join } from 'path'
 import { config } from '../system/config.js'
+import { getGroupAccess } from '../system/group-access.js'
+import { botDatabase } from '../storage/database.js'
 import type { IncomingMessage, MessageContentType } from './types.js'
 
 // @itsliaaa/baileys (v7 fork) does not re-export WAMessage/WASocket as named types
 // at the top level. The runtime API is identical, so we type them loosely here.
 type WAMessage = any
 type WASocket = any
+
+interface KnownGroup {
+  subject: string
+  allowed: boolean
+  lastSeen: string
+}
 
 const logger = pino({ transport: { target: 'pino-pretty' }, level: config.LOG_LEVEL })
 
@@ -42,7 +50,11 @@ export class WhatsAppClient {
   // Message IDs already processed — prevents duplicate replies when Baileys
   // re-emits history/backfill messages on reconnect. Capped to bound memory.
   private processedIds = new Set<string>()
+  // Outgoing message IDs let us recognize replies reliably even when
+  // WhatsApp changes the quoted participant between phone and LID formats.
+  private sentMessageIds = new Set<string>()
   private static readonly PROCESSED_MAX = 2000
+  private groupParticipantsCache = new Map<string, { expiresAt: number; ids: string[] }>()
   // Pesan yang lebih tua dari batas ini dianggap backfill/history (bukan pesan
   // real-time), jadi tidak dibalas agar tidak "dibales lagi" pesan lama.
   private static readonly OLD_MSG_MS = 5 * 60 * 1000 // 5 menit
@@ -147,6 +159,10 @@ export class WhatsAppClient {
       // Handle incoming messages
       this.sock.ev.on('messages.upsert', this.onMessagesUpsert.bind(this))
 
+      // Notify the owner when this account is added to a group, including the
+      // current GROUP_JID allowlist decision.
+      this.sock.ev.on('group-participants.update', this.onGroupParticipantsUpdate.bind(this))
+
       // Track outbound delivery status (PENDING → server/error) to distinguish
       // "just slow" from "actually stuck". Useful for debugging 'Waiting for this message'.
       this.sock.ev.on('messages.update', (updates: any[]) => {
@@ -189,14 +205,130 @@ export class WhatsAppClient {
     this.messageHandler = handler
   }
 
+  private async onGroupParticipantsUpdate(update: any): Promise<void> {
+    if (!update?.id || update.action !== 'add' || !Array.isArray(update.participants)) return
+
+    for (const participant of update.participants) {
+      const participantJid = String(participant?.id || participant?.jid || participant || '')
+      if (participantJid) botDatabase.upsertMember(String(update.id), participantJid, String(participant?.notify || participant?.name || ''), '[bergabung ke grup]', false)
+    }
+
+    const ownIds = [
+      this.sock?.user?.id,
+      config.BOT_LID ? `${config.BOT_LID}@lid` : '',
+      ...this.botLids.map(lid => `${lid}@lid`),
+    ].filter(Boolean).map((value: string) => value.replace(/[^0-9]/g, ''))
+    const addedBot = update.participants.some((participant: string) => {
+      const digits = String(participant).replace(/[^0-9]/g, '')
+      return digits && ownIds.some(id => id === digits || id.endsWith(digits) || digits.endsWith(id))
+    })
+    if (!addedBot || !config.OWNER_NUMBER) return
+
+    const groupJid = String(update.id)
+    const allowed = getGroupAccess(groupJid) ?? this.isGroupAllowed(groupJid)
+    let subject = '(nama grup tidak tersedia)'
+    try {
+      const metadata = await this.sock.groupMetadata(groupJid)
+      subject = metadata?.subject || subject
+    } catch {
+      // The group can be unavailable briefly immediately after the add event.
+    }
+
+    await this.rememberGroup(groupJid, subject)
+
+    const status = allowed ? 'DIIZINKAN' : 'DIBLOKIR'
+    const message = [
+      '📥 Bot ditambahkan ke grup',
+      `Nama: ${subject}`,
+      `ID: ${groupJid}`,
+      `Status: ${status}`,
+      allowed
+        ? 'Bot akan merespons sesuai aturan grup.'
+        : 'Bot tidak akan merespons pesan dari grup ini. Tambahkan ID tersebut ke GROUP_JID jika ingin mengizinkan.',
+    ].join('\n')
+
+    await this.sendText(`${config.OWNER_NUMBER}@s.whatsapp.net`, message)
+    await this.sendInteractiveButtons(`${config.OWNER_NUMBER}@s.whatsapp.net`, 'Atur akses grup ini:', 'Group access', [
+      { id: `${config.PREFIX}group-allow ${groupJid}`, text: '✅ Izinkan' },
+      { id: `${config.PREFIX}group-block ${groupJid}`, text: '🚫 Blokir' },
+    ])
+    logger.info({ groupJid, subject, allowed }, 'Owner notified about bot group add')
+  }
+
+  private isGroupAllowed(groupJid: string): boolean {
+    if (!config.GROUP_JID) return true
+    return config.GROUP_JID.split(',').map(id => id.trim()).includes(groupJid)
+  }
+
+  private async readKnownGroups(): Promise<Record<string, KnownGroup>> {
+    try {
+      const parsed = JSON.parse(await readFile(config.GROUP_REGISTRY_FILE, 'utf8'))
+      return parsed && typeof parsed === 'object' ? parsed : {}
+    } catch (err: any) {
+      if (err?.code === 'ENOENT') return {}
+      throw err
+    }
+  }
+
+  private async rememberGroup(groupJid: string, subject: string): Promise<boolean> {
+    const groups = await this.readKnownGroups()
+    const isNew = !groups[groupJid]
+    groups[groupJid] = {
+      subject,
+      allowed: getGroupAccess(groupJid) ?? this.isGroupAllowed(groupJid),
+      lastSeen: new Date().toISOString(),
+    }
+    await mkdir(dirname(config.GROUP_REGISTRY_FILE), { recursive: true })
+    await writeFile(config.GROUP_REGISTRY_FILE, JSON.stringify(groups, null, 2) + '\n')
+    return isNew
+  }
+
+  private async syncParticipatingGroups(): Promise<void> {
+    if (typeof this.sock.groupFetchAllParticipating !== 'function') return
+    const participating = await this.sock.groupFetchAllParticipating()
+    const newlyFound: Array<{ id: string; subject: string; allowed: boolean }> = []
+
+    for (const group of Object.values(participating || {}) as any[]) {
+      const id = String(group?.id || '')
+      if (!id.endsWith('@g.us')) continue
+      const subject = group?.subject || '(nama grup tidak tersedia)'
+      for (const participant of group?.participants || []) {
+        const participantJid = String(participant?.id || participant?.jid || participant?.lid || participant?.phoneNumber || '')
+        const displayName = String(participant?.notify || participant?.name || participant?.verifiedName || '')
+        if (participantJid) botDatabase.upsertMember(id, participantJid, displayName, '[sinkronisasi anggota]', false)
+      }
+      const isNew = await this.rememberGroup(id, subject)
+      if (isNew) newlyFound.push({ id, subject, allowed: getGroupAccess(id) ?? this.isGroupAllowed(id) })
+    }
+
+    logger.info({ groupCount: Object.keys(participating || {}).length, newlyFound }, 'Participating groups synchronized')
+    if (!config.OWNER_NUMBER || newlyFound.length === 0) return
+
+    const lines = newlyFound.map(group =>
+      `- ${group.subject}\n  ${group.id}\n  Status: ${group.allowed ? 'DIIZINKAN' : 'DIBLOKIR'}`
+    )
+    await this.sendText(
+      `${config.OWNER_NUMBER}@s.whatsapp.net`,
+      `📋 Grup yang baru terdeteksi saat sinkronisasi:\n\n${lines.join('\n\n')}`
+    )
+    for (const group of newlyFound) {
+      await this.sendInteractiveButtons(`${config.OWNER_NUMBER}@s.whatsapp.net`, `Atur akses: ${group.subject}`, 'Group access', [
+        { id: `${config.PREFIX}group-allow ${group.id}`, text: '✅ Izinkan' },
+        { id: `${config.PREFIX}group-block ${group.id}`, text: '🚫 Blokir' },
+      ])
+    }
+  }
+
   /** Send a text message — with a single retry in case the socket was mid-reconnect.
    *  Pass `quoted` (the user's raw WAMessage) to reply to that message instead of
    *  sending a fresh chat bubble. */
-  async sendText(jid: string, text: string, quoted?: any): Promise<void> {
+  async sendText(jid: string, text: string, quoted?: any): Promise<boolean> {
+    const mentions = await this.resolveTextMentions(jid, text)
     const doSend = async (): Promise<boolean> => {
       try {
-        logger.info({ jid, textLength: text?.length, textPreview: text?.substring(0, 50), isReply: Boolean(quoted) }, 'sendText: sending')
-        const result = await this.sock.sendMessage(jid, { text }, quoted ? { quoted } : undefined)
+        logger.info({ jid, textLength: text?.length, textPreview: text?.substring(0, 50), mentionCount: mentions.length, isReply: Boolean(quoted) }, 'sendText: sending')
+        const result = await this.sock.sendMessage(jid, { text, ...(mentions.length > 0 ? { mentions } : {}) }, quoted ? { quoted } : undefined)
+        this.rememberSentResult(jid, result, 'text')
         logger.info({ result }, 'sendText: sent')
         return true
       } catch (err: any) {
@@ -215,6 +347,50 @@ export class WhatsAppClient {
     if (!ok) {
       logger.error({ jid }, 'sendText failed after retry — connection may be down')
     }
+    return ok
+  }
+
+  private rememberSentResult(jid: string, result: any, messageType: string): void {
+    const sentId = result?.key?.id
+    if (!sentId) return
+    this.sentMessageIds.add(sentId)
+    botDatabase.rememberOutgoing(jid, sentId, messageType)
+    if (this.sentMessageIds.size > 2000) {
+      const oldest = this.sentMessageIds.values().next().value
+      if (oldest) this.sentMessageIds.delete(oldest)
+    }
+  }
+
+  /** Convert literal @digits in group replies into real WhatsApp mentions. */
+  private async resolveTextMentions(jid: string, text: string): Promise<string[]> {
+    if (!jid.endsWith('@g.us')) return []
+    const requested = [...text.matchAll(/@(\d{6,20})\b/g)].map(match => match[1])
+    if (requested.length === 0) return []
+
+    let participantIds = this.groupParticipantsCache.get(jid)
+    if (!participantIds || participantIds.expiresAt < Date.now()) {
+      try {
+        const metadata = await this.sock.groupMetadata(jid)
+        participantIds = {
+          expiresAt: Date.now() + 5 * 60 * 1000,
+          ids: (metadata?.participants || []).map((participant: any) => String(participant.id || participant.jid || '')).filter(Boolean),
+        }
+        this.groupParticipantsCache.set(jid, participantIds)
+      } catch (err: any) {
+        logger.warn({ jid, err: err.message }, 'Failed to resolve group mentions')
+        return []
+      }
+    }
+
+    const mentions: string[] = []
+    for (const requestedId of requested) {
+      const match = participantIds.ids.find(id => {
+        const normalized = id.replace(/[^0-9]/g, '')
+        return normalized === requestedId || normalized.endsWith(requestedId) || requestedId.endsWith(normalized)
+      })
+      if (match && !mentions.includes(match)) mentions.push(match)
+    }
+    return mentions
   }
 
   /** Send a file (sticker, image, video, document, audio) */
@@ -249,7 +425,8 @@ export class WhatsAppClient {
         if (caption) payload.caption = caption
       }
 
-      await this.sock.sendMessage(jid, payload as any, quoted ? { quoted } : undefined)
+      const result = await this.sock.sendMessage(jid, payload as any, quoted ? { quoted } : undefined)
+      this.rememberSentResult(jid, result, fileType)
     } catch (err) {
       logger.error({ err, filePath, fileType }, 'Failed to send file')
     }
@@ -277,13 +454,14 @@ export class WhatsAppClient {
     }>
   ): Promise<boolean> {
     try {
-      await this.sock.sendMessage(jid, {
+      const result = await this.sock.sendMessage(jid, {
         text,
         footer,
         title,
         buttonText,
         sections,
       } as any)
+      this.rememberSentResult(jid, result, 'list')
       return true
     } catch (err) {
       logger.error({ err, jid }, 'Failed to send list menu')
@@ -299,7 +477,7 @@ export class WhatsAppClient {
     buttons: Array<{ id: string; text: string }>
   ): Promise<boolean> {
     try {
-      await this.sock.sendMessage(jid, {
+      const result = await this.sock.sendMessage(jid, {
         text,
         footer,
         buttons: buttons.map(button => ({
@@ -309,6 +487,7 @@ export class WhatsAppClient {
         })),
         headerType: 1,
       } as any)
+      this.rememberSentResult(jid, result, 'buttons')
       return true
     } catch (err) {
       logger.error({ err, jid }, 'Failed to send quick buttons')
@@ -328,7 +507,7 @@ export class WhatsAppClient {
     buttons: Array<{ id: string; text: string }>
   ): Promise<boolean> {
     try {
-      await this.sock.sendMessage(jid, {
+      const result = await this.sock.sendMessage(jid, {
         text,
         footer,
         interactiveButtons: buttons.map(button => ({
@@ -339,6 +518,7 @@ export class WhatsAppClient {
           }),
         })),
       } as any)
+      this.rememberSentResult(jid, result, 'buttons')
       return true
     } catch (err) {
       logger.error({ err, jid }, 'Failed to send interactive buttons')
@@ -528,6 +708,9 @@ export class WhatsAppClient {
       // Refresh the set of bot LIDs (needed to detect @mentions in groups).
       this.botLids = await this.loadBotLids()
       logger.info({ botLids: this.botLids }, 'Loaded bot LIDs for group mention detection')
+      this.syncParticipatingGroups().catch(err => {
+        logger.warn({ err: err?.message }, 'Failed to sync participating groups')
+      })
       // Ensure the bot's presence privacy lets others see the typing indicator.
       this.ensurePresencePrivacy()
     }
@@ -596,7 +779,9 @@ export class WhatsAppClient {
     const participant = isGroup ? (msg.key.participant || undefined) : undefined
 
     // Extract text content
-    const fullMsg = msg.message
+    // Unwrap ephemeral/view-once messages so media such as owner stickers are
+    // detected the same way as ordinary sticker messages.
+    const fullMsg = normalizeMessageContent(msg.message) || msg.message
     if (!fullMsg) return null
 
     let text = ''
@@ -673,8 +858,31 @@ export class WhatsAppClient {
       hasMedia = true
     }
 
+    // Captions/replies can populate text through extendedTextMessage before
+    // the media branch above runs. Normalize the media type afterward so an
+    // image-edit request is not accidentally treated as text-only.
+    if (fullMsg.imageMessage) {
+      messageType = 'image'
+      hasMedia = true
+      if (!text && fullMsg.imageMessage.caption) text = fullMsg.imageMessage.caption
+    } else if (fullMsg.videoMessage) {
+      messageType = 'video'
+      hasMedia = true
+      if (!text && fullMsg.videoMessage.caption) text = fullMsg.videoMessage.caption
+    } else if (fullMsg.stickerMessage) {
+      messageType = 'sticker'
+      hasMedia = true
+    }
+
     // Extract quoted text if replying to a message
-    const quotedMsg = fullMsg.extendedTextMessage?.contextInfo?.quotedMessage
+    // Most replies use extendedTextMessage, but media replies can carry the
+    // same contextInfo under their media node in some WhatsApp clients.
+    const contextInfo = fullMsg.extendedTextMessage?.contextInfo ||
+      fullMsg.imageMessage?.contextInfo ||
+      fullMsg.videoMessage?.contextInfo ||
+      fullMsg.documentMessage?.contextInfo ||
+      fullMsg.stickerMessage?.contextInfo
+    const quotedMsg = contextInfo?.quotedMessage
     let quotedText: string | undefined
     if (quotedMsg) {
       quotedText =
@@ -692,7 +900,6 @@ export class WhatsAppClient {
     const phoneNumber = sender.replace(/[^0-9]/g, '')
 
     const botId = this.sock?.user?.id?.split(':')[0] || ''
-    const contextInfo = fullMsg.extendedTextMessage?.contextInfo
 
     // A message is "addressed to the bot" if it mentions:
     //  - the bot's phone number (6282265468133…), or
@@ -714,8 +921,21 @@ export class WhatsAppClient {
       return knownIds.some(id => n.includes(normalize(id)))
     }
 
-    const isBotMentioned = contextInfo?.mentionedJid?.some((j: string) => isMentioningBot(j)) || false
-    const isReplyToBot = isMentioningBot(contextInfo?.participant) || false
+    const metadataMention = contextInfo?.mentionedJid?.some((j: string) => isMentioningBot(j)) || false
+    // Some clients preserve the visible @digits but drop mentionedJid metadata
+    // when a LID is selected/copied. Treat an exact known bot ID in the text as
+    // an explicit address as well.
+    const textMention = [...text.matchAll(/@(\d{6,20})\b/g)].some(match =>
+      knownIds.some(id => {
+        const normalized = normalize(id)
+        return normalized === match[1] || normalized.endsWith(match[1]) || match[1].endsWith(normalized)
+      })
+    )
+    const isBotMentioned = metadataMention || textMention
+    const isReplyToBot = isMentioningBot(contextInfo?.participant) ||
+      Boolean(contextInfo?.stanzaId && (
+        this.sentMessageIds.has(contextInfo.stanzaId) || botDatabase.isOutgoing(jid, contextInfo.stanzaId)
+      ))
 
     return {
       jid,
@@ -724,8 +944,10 @@ export class WhatsAppClient {
       messageType,
       hasMedia,
       quotedText,
+      quotedParticipant: contextInfo?.participant || undefined,
       isGroup,
       participant,
+      displayName: String(msg.pushName || '').trim() || undefined,
       isBotMentioned,
       isReplyToBot,
       raw: msg,

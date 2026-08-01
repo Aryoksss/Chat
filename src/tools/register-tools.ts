@@ -1,5 +1,7 @@
 import { toolsRegistry } from './registry.js'
 import { handleSticker } from './handlers/sticker.js'
+import { handleStickerPool } from './handlers/sticker-pool.js'
+import { handleSmeme } from './handlers/smeme.js'
 import { handleYtDownload } from './handlers/yt-dl.js'
 import { handleIgDownload } from './handlers/ig-dl.js'
 import { handleTtDownload } from './handlers/tt-dl.js'
@@ -16,10 +18,13 @@ import { handleWebFetch } from './handlers/web-fetch.js'
 import { handleFourkhdSearch, handleFourkhdLatest, handleFourkhdDetail } from './handlers/fourkhd.js'
 import { handleAnimeDlSearch, handleAnimeLinks } from './handlers/anime-dl.js'
 import { handlePap } from './handlers/pap.js'
+import { handleReminder } from './handlers/reminder.js'
 
 export function registerAllTools() {
   const tools = [
     { name: 'sticker', desc: 'Bikin sticker dari gambar', params: { imageType: { type: 'string' } }, handler: handleSticker },
+    { name: 'smeme', desc: 'Bikin sticker meme dari gambar atau video dengan teks atas/bawah', params: { text: { type: 'string', description: 'Teks meme; gunakan tanda | untuk memisahkan teks atas dan bawah' } }, handler: handleSmeme },
+    { name: 'sticker-pool', desc: 'Kirim sticker yang paling sesuai dengan konteks percakapan dari pool lokal. Selalu isi context dengan maksud/suasana pesan user.', params: { context: { type: 'string', description: 'Konteks atau suasana pesan, misalnya lucu, sedih, marah, setuju, kaget' } }, handler: handleStickerPool },
     { name: 'yt-dl', desc: 'Download YouTube', params: { url: { type: 'string' }, format: { type: 'string' } }, handler: handleYtDownload },
     { name: 'ig-dl', desc: 'Download Instagram', params: { url: { type: 'string' } }, handler: handleIgDownload },
     { name: 'tt-dl', desc: 'Download TikTok', params: { url: { type: 'string' } }, handler: handleTtDownload },
@@ -30,6 +35,7 @@ export function registerAllTools() {
     { name: 'translate', desc: 'Translate teks', params: { text: { type: 'string' }, to: { type: 'string' } }, handler: handleTranslate },
     { name: 'shortlink', desc: 'Pendekin URL', params: { url: { type: 'string' } }, handler: handleShortlink },
     { name: 'weather', desc: 'Cek cuaca', params: { city: { type: 'string' } }, handler: handleWeather },
+    { name: 'reminder', desc: 'Buat pengingat sekali atau berulang. Pesan saat jatuh tempo akan disusun AI secara bervariasi.', params: { request: { type: 'string', description: 'Kalimat lengkap, contoh: ingatkan saya besok jam 8 bayar listrik' }, task: { type: 'string' }, when: { type: 'string' } }, handler: handleReminder },
     { name: 'anime', desc: 'Cari anime', params: { query: { type: 'string' } }, handler: handleAnimeSearch },
     { name: 'web-search', desc: 'Cari informasi di internet. Pakai UNTUK SEMUA pertanyaan yang butuh fakta, berita, info umum, atau hal yang tidak kamu yakin', params: { query: { type: 'string' }, maxResults: { type: 'number' } }, handler: handleWebSearch },
     { name: 'web-fetch', desc: 'Baca isi halaman web dari sebuah URL (ambil teks/JSON dari link). Gunakan untuk membaca detail dari link yang ditemukan web-search', params: { url: { type: 'string' }, maxChars: { type: 'number' } }, handler: handleWebFetch },
