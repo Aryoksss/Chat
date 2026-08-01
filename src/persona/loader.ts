@@ -30,9 +30,11 @@ export class PersonaLoader {
   async loadPersona(name: 'owner' | 'group'): Promise<PersonaConfig> {
     const dir = path.resolve(config.PERSONAS_DIR, name)
 
-    const [agent, soul, toolsMd] = await Promise.all([
+    const [agent, soul, identity, user, toolsMd] = await Promise.all([
       this.readFile(path.join(dir, 'AGENT.md')),
       this.readFile(path.join(dir, 'SOUL.md')),
+      this.readFile(path.join(dir, 'IDENTITY.md')),
+      this.readFile(path.join(dir, 'USER.md')),
       this.readFile(path.join(dir, 'TOOLS.md')),
     ])
 
@@ -42,6 +44,8 @@ export class PersonaLoader {
       name,
       agent: agent || `Anda adalah asisten WhatsApp untuk ${name}.`,
       soul: soul || 'Bersikaplah ramah dan membantu.',
+      identity: identity || undefined,
+      user: user || undefined,
       tools,
     }
   }
