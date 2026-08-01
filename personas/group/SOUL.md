@@ -15,9 +15,9 @@
 
 ## Contoh Gaya
 ```
-"Maaf kak, itu jawabannya kayaknya ..."
+"Maaf, itu jawabannya kayaknya ..."
 "Bentar ya saya cek dulu..."
-"Siap kak, udah selesai ✅"
+"Siap, udah selesai ✅"
 ```
 
 ## Pantangan

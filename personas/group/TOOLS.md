@@ -36,6 +36,11 @@ Description: Generate QR code dari teks.
 Parameters:
 - text (string, required) — Teks untuk QR code
 
+## img-gen
+Description: Generate gambar baru dari prompt, atau EDIT gambar yang dikirim/di-reply. Model FLUX AI. Default realistic; anti-anime kecuali user minta anime.
+Parameters:
+- prompt (string, required) — Deskripsi gambar baru, atau instruksi edit kalau user reply/kirim foto
+
 ## translate
 Description: Translate teks ke bahasa lain.
 Parameters:
@@ -51,3 +56,45 @@ Parameters:
 Description: Cari info anime.
 Parameters:
 - query (string, required) — Judul anime
+
+## web-search
+Description: Cari informasi di internet. Pakai UNTUK SEMUA pertanyaan yang butuh fakta, berita, info umum, atau hal yang tidak yakin.
+Parameters:
+- query (string, required) — Kata kunci yang mau dicari
+- maxResults (number, optional) — Jumlah hasil, default 5
+
+## web-fetch
+Description: Baca isi halaman web dari sebuah URL (ambil teks/JSON dari link). Gunakan untuk membaca detail dari link yang ditemukan web-search.
+Parameters:
+- url (string, required) — URL halaman yang mau dibaca
+- maxChars (number, optional) — Maksimal karakter yang diambil, default 4000
+
+## 4khd-search
+Description: Cari galeri foto dari situs 4khd.com berdasarkan kata kunci (misal nama karakter). Balikin daftar post berisi judul, ukuran, jumlah foto, dan URL. Lanjutkan dengan 4khd-detail buat lihat/kirim fotonya.
+Parameters:
+- query (string, required) — Kata kunci yang mau dicari di 4khd
+- page (number, optional) — Nomor halaman hasil, default 1
+
+## 4khd-latest
+Description: Ambil daftar galeri foto terbaru dari homepage 4khd.com. Lanjutkan dengan 4khd-detail buat buka post.
+Parameters:
+- page (number, optional) — Nomor halaman, default 1
+
+## 4khd-detail
+Description: Buka detail post galeri foto dari 4khd.com. url BISA dikosongkan: saat user minta "kirim no X" dari hasil 4khd-search, isi index = nomor X tersebut (bot ingat hasil search terakhir). Tanpa download: tampilkan daftar URL foto. Dengan download=N: kirim N foto sekaligus, download tanpa nilai = 1 foto. Pakai from (1-based) buat mulai dari foto tertentu.
+Parameters:
+- url (string, optional) — URL post 4khd. Kosongkan kalau pakai index dari hasil search
+- index (number, optional) — Nomor post (1-based) dari hasil 4khd-search terakhir, dipakai saat url kosong
+- download (integer, optional) — Jumlah foto yang mau dikirim (misal 1, 2, 5). Tanpa ini = tampilkan daftar URL
+- from (number, optional) — Indeks foto (1-based) untuk mulai mengirim, default 1
+
+## anime-search
+Description: Cari anime untuk DOWNLOAD (batch/episode) via Kusonime. Balikin daftar judul + URL. Lanjut buka link download dengan anime-links.
+Parameters:
+- query (string, required) — Judul anime yang mau dicari
+
+## anime-links
+Description: Tampilkan link download anime per resolusi + host (Google Drive, Mega, Mediafire, Gofile, dll). url BISA dikosongkan: saat user minta "link no X" dari hasil anime-search, isi index = nomor X tersebut. TIDAK mengunduh file ke chat — hanya menampilkan link.
+Parameters:
+- url (string, optional) — URL detail anime. Kosongkan kalau pakai index dari hasil search
+- index (number, optional) — Nomor anime (1-based) dari hasil anime-search terakhir, dipakai saat url kosong
