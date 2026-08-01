@@ -8,10 +8,16 @@ import { config } from '../../system/config.js'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { existsSync } from 'fs'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
 
 interface IgArgs {
   url: string
 }
+
+const execFileP = promisify(execFile)
+const MAX_GALLERY_ITEMS = 10
+const MAX_MEDIA_BYTES = 50 * 1024 * 1024
 
 /** Load cookies from file for authenticated requests */
 async function loadCookies(): Promise<string | null> {
@@ -39,7 +45,63 @@ async function loadCookies(): Promise<string | null> {
   return null
 }
 
-export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: 'image' | 'video' | 'sticker' | 'audio' | 'document'; caption?: string; error?: string }> {
+function findCookieFile(): string | null {
+  for (const fileName of ['instagram.txt', 'instagram-cookies.txt']) {
+    const cookieFile = join(config.COOKIES_DIR || 'data/cookies', fileName)
+    if (existsSync(cookieFile)) return cookieFile
+  }
+  return null
+}
+
+async function downloadWithGalleryDl(url: string, cookieFile: string): Promise<{
+  filePath?: string
+  filePaths?: string[]
+  fileType: 'image' | 'video'
+} | null> {
+  const downloaded: string[] = []
+  try {
+    const { stdout } = await execFileP('gallery-dl', [
+      '--get-urls', '--cookies', cookieFile, '--quiet', '--no-mtime', url,
+    ], { timeout: 45_000, maxBuffer: 2 * 1024 * 1024 })
+
+    const mediaUrls = stdout
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line => /^https?:\/\//i.test(line) && isAllowedInstagramMediaUrl(line))
+      .slice(0, MAX_GALLERY_ITEMS)
+    if (mediaUrls.length === 0) return null
+
+    let hasVideo = false
+    for (const [index, mediaUrl] of mediaUrls.entries()) {
+      const response = await fetch(mediaUrl, { signal: AbortSignal.timeout(30_000) })
+      if (!response.ok) throw new Error(`gallery media HTTP ${response.status}`)
+      const contentLength = Number(response.headers.get('content-length') || 0)
+      if (contentLength > MAX_MEDIA_BYTES) throw new Error('Media Instagram terlalu besar')
+      const buffer = Buffer.from(await response.arrayBuffer())
+      if (buffer.length > MAX_MEDIA_BYTES) throw new Error('Media Instagram terlalu besar')
+
+      const contentType = response.headers.get('content-type') || ''
+      const isVideo = contentType.includes('video') || /\.(?:mp4|mov)(?:[?#]|$)/i.test(mediaUrl)
+      hasVideo ||= isVideo
+      const extension = isVideo ? 'mp4' : 'jpg'
+      const outPath = join(tmpdir(), `ig_gallery_${Date.now()}_${index}.${extension}`)
+      const { writeFile } = await import('fs/promises')
+      await writeFile(outPath, buffer)
+      downloaded.push(outPath)
+    }
+
+    return downloaded.length === 1
+      ? { filePath: downloaded[0], fileType: hasVideo ? 'video' : 'image' }
+      : { filePaths: downloaded, fileType: hasVideo ? 'video' : 'image' }
+  } catch (err) {
+    const { unlink } = await import('fs/promises')
+    await Promise.all(downloaded.map(filePath => unlink(filePath).catch(() => {})))
+    logger.warn({ error: err instanceof Error ? err.message : String(err) }, 'gallery-dl Instagram fallback failed')
+    return null
+  }
+}
+
+export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean; text?: string; filePath?: string; filePaths?: string[]; fileType?: 'image' | 'video' | 'sticker' | 'audio' | 'document'; caption?: string; error?: string }> {
   const { url } = args
 
   if (!url || !url.includes('instagram.com')) {
@@ -58,6 +120,20 @@ export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean
       logger.info('Using Instagram cookies from file')
     } else {
       logger.warn('No Instagram cookies found — public API only')
+    }
+
+    // gallery-dl handles Instagram's current authenticated API flow more
+    // reliably than the public downloader and legacy HTML endpoint.
+    const cookieFile = findCookieFile()
+    if (cookieFile) {
+      const gallery = await downloadWithGalleryDl(url, cookieFile)
+      if (gallery) {
+        return {
+          success: true,
+          text: '📸 Instagram media berhasil didownload!',
+          ...gallery,
+        }
+      }
     }
 
     // Try the public downloader first, but keep scraping available when the
