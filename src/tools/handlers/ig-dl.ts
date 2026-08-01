@@ -2,7 +2,7 @@
 // Tool: Instagram Downloader (with cookies support)
 // ============================================================
 
-import { readFile } from 'fs/promises'
+import { readFile, readdir, stat, unlink } from 'fs/promises'
 import { logger } from '../../system/logger.js'
 import { config } from '../../system/config.js'
 import { tmpdir } from 'os'
@@ -101,6 +101,58 @@ async function downloadWithGalleryDl(url: string, cookieFile: string): Promise<{
   }
 }
 
+/** Download Instagram Reels through the official yt-dlp Instagram extractor. */
+async function downloadReelWithYtDlp(url: string, cookieFile: string | null): Promise<{
+  filePath: string
+  fileType: 'video'
+} | null> {
+  const outputPrefix = join(tmpdir(), `ig_reel_${Date.now()}_${process.pid}`)
+  const outputTemplate = `${outputPrefix}.%(ext)s`
+  const args = [
+    '--no-playlist',
+    '--no-warnings',
+    '--no-progress',
+    '--restrict-filenames',
+    '--max-filesize', `${Math.floor(MAX_MEDIA_BYTES / 1024 / 1024)}M`,
+    '--format', 'best[ext=mp4]/best',
+    '--output', outputTemplate,
+  ]
+  if (cookieFile) args.push('--cookies', cookieFile)
+  args.push(url)
+
+  try {
+    const result = await execFileP('yt-dlp', args, {
+      timeout: 90_000,
+      maxBuffer: 4 * 1024 * 1024,
+    })
+    const prefix = outputPrefix.split('/').pop() || ''
+    const files = (await readdir(tmpdir()))
+      .filter(name => name.startsWith(`${prefix}.`) && !name.endsWith('.part'))
+      .map(name => join(tmpdir(), name))
+
+    const filePath = files.find(file => file.toLowerCase().endsWith('.mp4')) || files[0]
+    if (!filePath) {
+      throw new Error(`yt-dlp tidak menghasilkan file${result.stderr ? `: ${result.stderr.trim()}` : ''}`)
+    }
+
+    const fileInfo = await stat(filePath)
+    if (fileInfo.size > MAX_MEDIA_BYTES) {
+      throw new Error('Media Reel terlalu besar')
+    }
+
+    logger.info({ filePath, bytes: fileInfo.size }, 'Instagram Reel downloaded with yt-dlp')
+    return { filePath, fileType: 'video' }
+  } catch (err) {
+    const prefix = outputPrefix.split('/').pop() || ''
+    const files = await readdir(tmpdir())
+      .then(names => names.filter(name => name.startsWith(`${prefix}.`)).map(name => join(tmpdir(), name)))
+      .catch(() => [])
+    await Promise.all(files.map(file => unlink(file).catch(() => {})))
+    logger.warn({ error: err instanceof Error ? err.message : String(err) }, 'yt-dlp Instagram Reel download failed')
+    return null
+  }
+}
+
 export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean; text?: string; filePath?: string; filePaths?: string[]; fileType?: 'image' | 'video' | 'sticker' | 'audio' | 'document'; caption?: string; error?: string }> {
   const { url } = args
 
@@ -114,6 +166,7 @@ export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
     }
     const cookies = await loadCookies()
+    const cookieFile = findCookieFile()
     const instagramHeaders: Record<string, string> = { ...publicHeaders }
     if (cookies) {
       instagramHeaders['Cookie'] = cookies
@@ -122,9 +175,22 @@ export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean
       logger.warn('No Instagram cookies found — public API only')
     }
 
+    // Reels are handled by yt-dlp, whose Instagram extractor explicitly
+    // supports /reel/ and /reels/ URLs. Keep the older Instagram fallbacks
+    // below available if yt-dlp is unavailable or the post cannot be read.
+    if (isInstagramReelUrl(url)) {
+      const reel = await downloadReelWithYtDlp(url, cookieFile)
+      if (reel) {
+        return {
+          success: true,
+          text: '📸 Instagram Reel berhasil didownload!',
+          ...reel,
+        }
+      }
+    }
+
     // gallery-dl handles Instagram's current authenticated API flow more
     // reliably than the public downloader and legacy HTML endpoint.
-    const cookieFile = findCookieFile()
     if (cookieFile) {
       const gallery = await downloadWithGalleryDl(url, cookieFile)
       if (gallery) {
@@ -245,6 +311,17 @@ export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean
 function extractCode(url: string): string {
   const match = url.match(/(?:p|reel|tv)\/([^/?]+)/)
   return match?.[1] || ''
+}
+
+function isInstagramReelUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value)
+    const hostname = parsed.hostname.toLowerCase()
+    if (hostname !== 'instagram.com' && !hostname.endsWith('.instagram.com')) return false
+    return /\/reels?(?!\/audio\/)\/[^/?#]+/i.test(parsed.pathname)
+  } catch {
+    return false
+  }
 }
 
 function extractInstagramMeta(html: string, names: string[]): string | null {
