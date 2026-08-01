@@ -680,6 +680,9 @@ export class WhatsAppClient {
       quotedText =
         quotedMsg.conversation ||
         quotedMsg.extendedTextMessage?.text ||
+        quotedMsg.extendedTextMessage?.matchedText ||
+        quotedMsg.extendedTextMessage?.canonicalUrl ||
+        quotedMsg.extendedTextMessage?.contextInfo?.externalAdReply?.sourceUrl ||
         quotedMsg.imageMessage?.caption ||
         quotedMsg.videoMessage?.caption ||
         undefined

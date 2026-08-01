@@ -60,17 +60,31 @@ export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean
       logger.warn('No Instagram cookies found — public API only')
     }
 
-    // Try public Instagram downloader API first
-    const apiUrl = `https://api.egojs.com/api/download/instagram?url=${encodeURIComponent(url)}`
-    const response = await fetch(apiUrl, { headers: publicHeaders })
-    const data = await response.json() as any
+    // Try the public downloader first, but keep scraping available when the
+    // provider is unavailable (for example, DNS failure or rate limiting).
+    let data: any = null
+    try {
+      const apiUrl = `https://api.egojs.com/api/download/instagram?url=${encodeURIComponent(url)}`
+      const response = await fetch(apiUrl, {
+        headers: publicHeaders,
+        signal: AbortSignal.timeout(15000),
+      })
+      if (!response.ok) throw new Error(`public API HTTP ${response.status}`)
+      data = await response.json() as any
+    } catch (publicErr) {
+      logger.warn({ err: publicErr }, 'Public Instagram downloader unavailable — trying direct scrape')
+    }
 
     if (data?.result?.media?.[0]) {
       const media = data.result.media[0]
       const mediaUrl = media.url || media.download_url
 
       if (mediaUrl) {
-        const mediaResp = await fetch(mediaUrl, { headers: publicHeaders })
+        const mediaResp = await fetch(mediaUrl, {
+          headers: publicHeaders,
+          signal: AbortSignal.timeout(30000),
+        })
+        if (!mediaResp.ok) throw new Error(`Instagram media HTTP ${mediaResp.status}`)
         const buffer = Buffer.from(await mediaResp.arrayBuffer())
         const ext = mediaUrl.includes('.mp4') ? 'mp4' : 'jpg'
         const outPath = join(tmpdir(), `ig_${Date.now()}.${ext}`)
@@ -95,14 +109,20 @@ export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean
             ...instagramHeaders,
             'Accept': 'application/json',
             'X-Requested-With': 'XMLHttpRequest',
-          }
+          },
+          signal: AbortSignal.timeout(15000),
         })
+        if (!igResp.ok) throw new Error(`Instagram page HTTP ${igResp.status}`)
         const igData = await igResp.json() as any
         const items = igData?.items?.[0] || igData?.graphql?.shortcode_media
         if (items) {
           const mediaUrl = items.video_versions?.[0]?.url || items.display_url
           if (mediaUrl) {
-            const mediaResp = await fetch(mediaUrl, { headers: publicHeaders })
+            const mediaResp = await fetch(mediaUrl, {
+              headers: publicHeaders,
+              signal: AbortSignal.timeout(30000),
+            })
+            if (!mediaResp.ok) throw new Error(`Instagram media HTTP ${mediaResp.status}`)
             const buffer = Buffer.from(await mediaResp.arrayBuffer())
             const ext = items.video_versions ? 'mp4' : 'jpg'
             const outPath = join(tmpdir(), `ig_${Date.now()}.${ext}`)
