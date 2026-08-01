@@ -7,6 +7,10 @@ Bot WhatsApp berbasis TypeScript dengan persona terpisah untuk owner dan grup, i
 - Persona owner dan grup yang dapat diatur melalui file Markdown.
 - AI dengan retry, exponential backoff, fallback model, dan tool calling.
 - Memory jangka pendek per chat serta memory jangka panjang yang diarsipkan dan diringkas otomatis.
+- Database SQLite lokal untuk profil anggota grup, reply tracking, job media, riwayat sticker, dan reminder.
+- Reply ke seluruh keluaran bot (teks/gambar/video/sticker) tetap dikenali setelah restart.
+- Sticker kontekstual memakai skor emosi, confidence, dan rotasi deterministik agar tidak repetitif.
+- Reminder sekali/berulang dengan pesan jatuh tempo yang disusun AI secara bervariasi.
 - Menu WhatsApp interaktif dengan fallback ke menu teks.
 - Prefix command `.`, `/`, dan `!`. Nilai `PREFIX` menjadi prefix utama yang ditampilkan di menu.
 - Antrean pesan per chat, rate limiter grup, deduplikasi pesan, dan graceful shutdown.
@@ -47,6 +51,7 @@ GROUP_JID=1234567890-123456@g.us
 PREFIX=.
 SESSION_DIR=data/sessions
 LOG_LEVEL=info
+DATABASE_FILE=data/bot.db
 ```
 
 Konfigurasi gambar opsional:
@@ -74,6 +79,11 @@ CF_IMAGE_TIMEOUT_MS=60000
 ```
 
 `OWNER_LID` diperlukan jika WhatsApp melaporkan chat owner memakai Linked ID (`@lid`) dan nomor biasa tidak cocok. `BOT_LID` membantu mendeteksi mention bot di grup.
+
+Saat bot ditambahkan ke grup, owner otomatis menerima DM berisi nama, ID, dan status izin grup berdasarkan `GROUP_JID`.
+Saat konek ulang, bot juga menyinkronkan semua grup yang sedang diikutinya ke `data/groups.json` dan hanya memberi DM untuk grup yang baru terdeteksi.
+DM notifikasi grup menyediakan tombol `Izinkan` dan `Blokir`; keputusan disimpan di `data/group-access.json` dan mengoverride `GROUP_JID`.
+Owner juga bisa mengirim `Izinkan Nama Grup`, `Blokir Nama Grup`, atau `.groups` untuk menampilkan ulang daftar grup dan tombol akses.
 
 ## Menjalankan Bot
 
@@ -110,6 +120,17 @@ Prefix pada `PREFIX` dipakai sebagai prefix utama untuk row menu dan prompt lanj
 | `.menu` / `.help` / `.commands` | Menampilkan menu interaktif |
 | `.helper` | Panduan dan aksi cepat AI |
 | `.sticker` / `.st` | Membuat sticker dari gambar atau gambar yang di-reply |
+| `.smeme teks atas \| teks bawah` | Membuat sticker meme dari gambar/video yang dikirim atau di-reply |
+| `.sticker-pool <konteks>` / `.sp <konteks>` | Mengirim sticker yang cocok dengan konteks dari `data/stickers/pool/` |
+| `.anggota` / `.siapa <nama>` | Menampilkan anggota grup yang sudah dikenal bot |
+| `.panggil-aku <nama>` | Menetapkan nama panggilan sendiri di grup |
+| `.jobs` | Melihat job media aktif dan terbaru |
+| `.cancel <id>` | Membatalkan job media milik pengirim command |
+| `.reminder besok jam 8 <pesan>` | Membuat pengingat sekali atau berulang |
+| `.reminders` | Melihat pengingat aktif di chat |
+| `.cancel-reminder <id>` | Membatalkan pengingat milik pembuatnya |
+
+Sticker yang masuk dari owner maupun grup otomatis diarsipkan secara deduplicated di `data/stickers/inbox/`, dianalisis AI, lalu dimasukkan ke pool jika analisis berhasil. Riwayat pemakaian per chat mencegah sticker yang sama terus terkirim selama masih ada alternatif relevan.
 | `.yt <url>` | Mengunduh video YouTube; tambahkan `--audio` untuk audio |
 | `.ig <url>` | Mengunduh media Instagram |
 | `.tt <url>` | Mengunduh video TikTok |
@@ -141,6 +162,9 @@ Command berikut hanya dijalankan untuk persona owner:
 | `/log` | Menampilkan level log aktif |
 | `/memory` | Menampilkan memory untuk chat saat ini |
 | `/clear` | Menghapus memory untuk chat saat ini |
+| `.stickers` | Melihat seluruh sticker beserta tag-nya |
+| `.retag <nomor> tag1,tag2 \| deskripsi` | Memperbarui konteks sticker |
+| `.hapus-sticker <nomor>` | Menghapus sticker dari pool |
 
 Command owner juga menerima prefix `.` dan `!`, misalnya `.status` atau `!reload`.
 
@@ -202,6 +226,7 @@ whatsapp-bot/
 |   |-- owner/
 |   `-- group/
 |-- data/
+|   |-- bot.db               # SQLite runtime, diabaikan Git
 |   |-- cookies/              # Cookie privat, diabaikan Git
 |   |-- pap/                  # Dataset PAP owner, diabaikan Git
 |   |-- sessions/             # Auth WhatsApp, diabaikan Git
@@ -220,6 +245,7 @@ npm test
 ```
 
 Test yang tersedia mencakup isolasi memory, menu owner/grup, serta perlindungan SSRF dasar.
+Test juga mencakup parser reminder WIB, database anggota/reply, otorisasi cancel job/reminder, dan rotasi sticker kontekstual.
 
 ## Data Sensitif
 

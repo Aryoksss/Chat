@@ -5,6 +5,16 @@ Description: Membuat sticker WhatsApp dari gambar. Reply gambar dengan .st atau 
 Parameters:
 - imageType (string, optional) — "reply" untuk reply gambar
 
+## sticker-pool
+Description: Mengirim sticker yang paling sesuai dengan konteks percakapan dari pool sticker lokal. Selalu isi context dengan maksud/suasana pesan user.
+Parameters:
+- context (string, required) — konteks/suasana pesan, misalnya lucu, sedih, marah, setuju, atau kaget
+
+## smeme
+Description: Membuat sticker meme dari gambar atau video dengan teks atas/bawah.
+Parameters:
+- text (string, required) — teks meme; gunakan `|` untuk memisahkan teks atas dan bawah
+
 ## yt-dl
 Description: Download video atau audio dari YouTube.
 Parameters:
@@ -51,6 +61,13 @@ Parameters:
 Description: Cek cuaca kota tertentu.
 Parameters:
 - city (string, required) — Nama kota
+
+## reminder
+Description: Membuat pengingat sekali atau berulang; pesan saat waktunya tiba disusun AI secara bervariasi.
+Parameters:
+- request (string, required) — Kalimat lengkap permintaan pengingat
+- task (string, optional) — Hal yang perlu diingatkan
+- when (string, optional) — Waktu natural atau ISO
 
 ## anime
 Description: Cari info anime.
