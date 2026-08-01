@@ -318,6 +318,35 @@ export class MessageHandler {
       if (handled) return
     }
 
+    // A bare Instagram URL is an explicit download request. Route it directly
+    // so the model cannot answer from stale conversation context without
+    // invoking the downloader.
+    const directDownload = this.getDirectDownloadCommand(msg.text)
+    if (directDownload) {
+      const toolContext = {
+        sock: client.sock,
+        jid: msg.jid,
+        participant: msg.participant,
+        downloadMedia: async (m: any) => client.downloadMedia(m),
+        rawMessage: msg.raw,
+        suppressTextResponse: false,
+      }
+      await client.sendPresence(msg.jid, 'composing')
+      try {
+        const result = await toolExecutor.executeToolCall(
+          directDownload.toolName,
+          { url: directDownload.url },
+          toolContext,
+        )
+        if (result && result.trim() && !toolContext.suppressTextResponse) {
+          await client.sendText(msg.jid, result, msg.raw)
+        }
+      } catch (err: any) {
+        await client.sendText(msg.jid, `❌ Error: ${err.message}`, msg.raw)
+      }
+      return
+    }
+
     // Auto-route image edit/generate requests straight to img-gen. Only active
     // when CF creds exist — without them edits would silently become a fresh
     // generation (misleading), so we let the AI handle it instead.
@@ -660,6 +689,22 @@ export class MessageHandler {
     }
 
     return true
+  }
+
+  private getDirectDownloadCommand(text: string): { toolName: string; url: string } | null {
+    const value = (text || '').trim()
+    if (!/^https?:\/\/\S+$/i.test(value)) return null
+
+    try {
+      const parsed = new URL(value)
+      const hostname = parsed.hostname.toLowerCase()
+      if (hostname === 'instagram.com' || hostname.endsWith('.instagram.com')) {
+        return { toolName: 'ig-dl', url: value }
+      }
+    } catch {
+      return null
+    }
+    return null
   }
 
   private parseCommandArgs(command: string, args: string[], msg: IncomingMessage): Record<string, unknown> {
