@@ -80,6 +80,9 @@ export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean
       const mediaUrl = media.url || media.download_url
 
       if (mediaUrl) {
+        if (!isAllowedInstagramMediaUrl(mediaUrl)) {
+          throw new Error('Media URL Instagram tidak dipercaya')
+        }
         const mediaResp = await fetch(mediaUrl, {
           headers: publicHeaders,
           signal: AbortSignal.timeout(30000),
@@ -113,31 +116,45 @@ export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean
           signal: AbortSignal.timeout(15000),
         })
         if (!igResp.ok) throw new Error(`Instagram page HTTP ${igResp.status}`)
-        const igData = await igResp.json() as any
-        const items = igData?.items?.[0] || igData?.graphql?.shortcode_media
-        if (items) {
-          const mediaUrl = items.video_versions?.[0]?.url || items.display_url
-          if (mediaUrl) {
-            const mediaResp = await fetch(mediaUrl, {
-              headers: publicHeaders,
-              signal: AbortSignal.timeout(30000),
-            })
-            if (!mediaResp.ok) throw new Error(`Instagram media HTTP ${mediaResp.status}`)
-            const buffer = Buffer.from(await mediaResp.arrayBuffer())
-            const ext = items.video_versions ? 'mp4' : 'jpg'
-            const outPath = join(tmpdir(), `ig_${Date.now()}.${ext}`)
-            const { writeFile } = await import('fs/promises')
-            await writeFile(outPath, buffer)
-            return {
-              success: true,
-              text: '📸 Instagram media berhasil didownload!',
-              filePath: outPath,
-              fileType: ext === 'mp4' ? 'video' : 'image',
-            }
+        const body = await igResp.text()
+        let mediaUrl: string | null = null
+        let isVideo = false
+
+        try {
+          const igData = JSON.parse(body) as any
+          const items = igData?.items?.[0] || igData?.graphql?.shortcode_media
+          mediaUrl = items?.video_versions?.[0]?.url || items?.display_url || null
+          isVideo = Boolean(items?.video_versions?.length)
+        } catch {
+          // Instagram frequently returns the normal HTML page instead of JSON.
+          mediaUrl = extractInstagramMeta(body, ['og:video', 'og:video:url', 'twitter:player:stream'])
+          isVideo = Boolean(mediaUrl)
+          if (!mediaUrl) mediaUrl = extractInstagramMeta(body, ['og:image', 'twitter:image'])
+        }
+
+        if (mediaUrl) {
+          if (!isAllowedInstagramMediaUrl(mediaUrl)) {
+            throw new Error('Media URL Instagram tidak dipercaya')
+          }
+          const mediaResp = await fetch(mediaUrl, {
+            headers: publicHeaders,
+            signal: AbortSignal.timeout(30000),
+          })
+          if (!mediaResp.ok) throw new Error(`Instagram media HTTP ${mediaResp.status}`)
+          const buffer = Buffer.from(await mediaResp.arrayBuffer())
+          const ext = isVideo ? 'mp4' : 'jpg'
+          const outPath = join(tmpdir(), `ig_${Date.now()}.${ext}`)
+          const { writeFile } = await import('fs/promises')
+          await writeFile(outPath, buffer)
+          return {
+            success: true,
+            text: '📸 Instagram media berhasil didownload!',
+            filePath: outPath,
+            fileType: ext === 'mp4' ? 'video' : 'image',
           }
         }
       } catch (scrapeErr) {
-        logger.warn({ scrapeErr }, 'Direct IG scrape failed')
+        logger.warn({ error: scrapeErr instanceof Error ? scrapeErr.message : String(scrapeErr) }, 'Direct IG scrape failed')
       }
     }
 
@@ -152,4 +169,34 @@ export async function handleIgDownload(args: IgArgs): Promise<{ success: boolean
 function extractCode(url: string): string {
   const match = url.match(/(?:p|reel|tv)\/([^/?]+)/)
   return match?.[1] || ''
+}
+
+function extractInstagramMeta(html: string, names: string[]): string | null {
+  for (const tag of html.matchAll(/<meta\b[^>]*>/gi)) {
+    const raw = tag[0]
+    const key = raw.match(/(?:property|name)=["']([^"']+)["']/i)?.[1]?.toLowerCase()
+    if (!key || !names.includes(key)) continue
+    const content = raw.match(/content=["']([^"']+)["']/i)?.[1]
+    if (!content) continue
+    return content
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&#x2F;/gi, '/')
+      .replace(/&#39;/g, "'")
+  }
+  return null
+}
+
+function isAllowedInstagramMediaUrl(value: string): boolean {
+  try {
+    const hostname = new URL(value).hostname.toLowerCase()
+    return hostname === 'instagram.com' ||
+      hostname.endsWith('.instagram.com') ||
+      hostname === 'cdninstagram.com' ||
+      hostname.endsWith('.cdninstagram.com') ||
+      hostname === 'fbcdn.net' ||
+      hostname.endsWith('.fbcdn.net')
+  } catch {
+    return false
+  }
 }
