@@ -1,33 +1,28 @@
 # WhatsApp AI Bot
 
-Bot WhatsApp berbasis TypeScript dengan persona terpisah untuk owner dan grup, integrasi AI melalui API OpenAI-compatible, pemanggilan tool, memory per chat, downloader media, serta reconnect otomatis.
+A TypeScript WhatsApp bot with separate owner and group personas, an OpenAI-compatible AI API, tool calling, per-chat memory, media downloaders, contextual stickers, Hu Tao voice notes, and automatic reconnect.
 
-## Fitur Utama
+## Features
 
-- Persona owner dan grup yang dapat diatur melalui file Markdown.
-- AI dengan retry, exponential backoff, fallback model, dan tool calling.
-- Memory jangka pendek per chat serta memory jangka panjang yang diarsipkan dan diringkas otomatis.
-- Database SQLite lokal untuk profil anggota grup, reply tracking, job media, riwayat sticker, dan reminder.
-- Reply ke seluruh keluaran bot (teks/gambar/video/sticker) tetap dikenali setelah restart.
-- Sticker kontekstual memakai skor emosi, confidence, dan rotasi deterministik agar tidak repetitif.
-- Balasan VN memakai suara Hu Tao (Edge-TTS + RVC); chat santai sesekali dibalas VN dengan peluang dan cooldown yang dapat diatur.
-- Reminder sekali/berulang dengan pesan jatuh tempo yang disusun AI secara bervariasi.
-- Menu WhatsApp interaktif dengan fallback ke menu teks.
-- Prefix command `.`, `/`, dan `!`. Nilai `PREFIX` menjadi prefix utama yang ditampilkan di menu.
-- Antrean pesan per chat, rate limiter grup, deduplikasi pesan, dan graceful shutdown.
-- Session WhatsApp tersimpan lokal dan reconnect dengan backoff tanpa menghapus session otomatis.
-- File hasil tool menggunakan direktori sementara dan dihapus setelah selesai dikirim.
-- Perlindungan SSRF pada tool pembaca URL (`web-fetch`).
+- Separate, Markdown-based owner and group personas.
+- AI retries, fallback models, tool calling, and per-chat memory.
+- SQLite storage for group members, replies, media jobs, reminders, and sticker usage.
+- Context-aware sticker pool with semantic analysis and recent-use rotation.
+- Hu Tao voice notes using Edge-TTS and RVC, including optional automatic replies.
+- Interactive WhatsApp menus with text-command fallback.
+- Image generation/editing, video downloaders, anime search, weather, translation, QR codes, reminders, and web search.
+- Group allowlist, bot-loop protection, rate limiting, deduplication, and graceful shutdown.
+- SSRF protection for URL-fetching tools.
 
-## Persyaratan
+## Requirements
 
-- Node.js 22 direkomendasikan; minimal Node.js 20 sesuai dependency Baileys.
-- Akun WhatsApp yang dapat ditautkan melalui Linked Devices.
-- API key layanan AI OpenAI-compatible.
-- Cloudflare AI bersifat opsional untuk generate/edit gambar.
-- Cookie Instagram dan Twitter/X bersifat opsional untuk fallback konten yang memerlukan login.
+- Node.js 22 recommended; Node.js 20 minimum.
+- A WhatsApp account that can be linked through Linked Devices.
+- An API key for an OpenAI-compatible AI service.
+- Cloudflare AI is optional for image generation/editing.
+- Instagram and Twitter/X cookies are optional for authenticated downloads.
 
-## Instalasi
+## Installation
 
 ```bash
 git clone git@github.com:Aryoksss/Chat.git
@@ -36,7 +31,7 @@ npm install
 cp .env.example .env
 ```
 
-Isi konfigurasi minimal di `.env`:
+Set the required values in `.env`:
 
 ```env
 NINE_ROUTER_API_KEY=your_api_key
@@ -47,6 +42,7 @@ AI_FALLBACK_MODEL=your_fallback_model
 OWNER_NUMBER=62812xxxxxxxx
 OWNER_LID=
 BOT_LID=
+IGNORED_BOT_IDS=
 GROUP_JID=1234567890-123456@g.us
 
 PREFIX=.
@@ -55,7 +51,7 @@ LOG_LEVEL=info
 DATABASE_FILE=data/bot.db
 ```
 
-Konfigurasi gambar opsional:
+Optional image configuration:
 
 ```env
 CF_ACCOUNT_ID=your_cloudflare_account_id
@@ -63,119 +59,85 @@ CF_API_KEY=your_cloudflare_api_token
 CF_IMAGE_MODEL=@cf/black-forest-labs/flux-2-klein-9b
 ```
 
-Untuk beberapa akun Cloudflare, gunakan JSON satu baris:
+For multiple Cloudflare accounts, use one-line JSON:
 
 ```env
 CF_ACCOUNTS=[{"accountId":"...","apiKey":"..."},{"accountId":"...","apiKey":"..."}]
 ```
 
-Konfigurasi opsional lainnya:
+Optional Hu Tao voice configuration:
 
 ```env
-WHISPER_API_URL=
 HUTAO_VOICE_SCRIPT=
 HUTAO_AUTO_VOICE_ENABLED=true
 HUTAO_AUTO_VOICE_CHANCE=0.18
 HUTAO_AUTO_VOICE_COOLDOWN_MS=600000
 HUTAO_AUTO_VOICE_MAX_CHARS=240
-KUSONIME_DOMAIN=https://kusonime.com
-AI_TIMEOUT_MS=60000
-CF_IMAGE_TIMEOUT_MS=60000
 ```
 
-`OWNER_LID` diperlukan jika WhatsApp melaporkan chat owner memakai Linked ID (`@lid`) dan nomor biasa tidak cocok. `BOT_LID` membantu mendeteksi mention bot di grup.
+`OWNER_LID` is needed when WhatsApp reports the owner with a Linked ID. `BOT_LID` helps detect bot mentions in groups. Put other bot numbers or LIDs in `IGNORED_BOT_IDS`, separated by commas, to prevent reply loops.
 
-Saat bot ditambahkan ke grup, owner otomatis menerima DM berisi nama, ID, dan status izin grup berdasarkan `GROUP_JID`.
-Saat konek ulang, bot juga menyinkronkan semua grup yang sedang diikutinya ke `data/groups.json` dan hanya memberi DM untuk grup yang baru terdeteksi.
-DM notifikasi grup menyediakan tombol `Izinkan` dan `Blokir`; keputusan disimpan di `data/group-access.json` dan mengoverride `GROUP_JID`.
-Owner juga bisa mengirim `Izinkan Nama Grup`, `Blokir Nama Grup`, atau `.groups` untuk menampilkan ulang daftar grup dan tombol akses.
+When the bot is added to a group, the owner receives a notification with the group name, ID, and access status. Group access can be changed with the notification buttons or with commands such as `Izinkan Nama Grup`, `Blokir Nama Grup`, and `.groups`.
 
-## Menjalankan Bot
-
-Mode normal:
+## Running
 
 ```bash
 npm start
 ```
 
-Mode development dengan watch:
+Development mode:
 
 ```bash
 npm run dev
 ```
 
-Saat session belum tersedia, scan QR dari terminal melalui WhatsApp > Linked Devices. Session disimpan di `data/sessions/`, sehingga QR normalnya hanya diperlukan saat pairing pertama atau session sudah dicabut dari WhatsApp.
+If no WhatsApp session exists, scan the QR code from WhatsApp → Linked Devices. The session is stored locally and normally only needs to be paired once.
 
-## Prefix
+## Commands
 
-Semua command menerima tiga prefix berikut:
+Commands accept `.`, `/`, and `!` prefixes. The configured `PREFIX` is used in menus.
 
-```text
-.menu   /menu   !menu
-.yt     /yt     !yt
-.anime  /anime  !anime
-```
-
-Prefix pada `PREFIX` dipakai sebagai prefix utama untuk row menu dan prompt lanjutan. Secara default nilainya `.`.
-
-## Command dan Tool
-
-| Command | Fungsi |
+| Command | Description |
 |---|---|
-| `.menu` / `.help` / `.commands` | Menampilkan menu interaktif |
-| `.helper` | Panduan dan aksi cepat AI |
-| `.sticker` / `.st` | Membuat sticker dari gambar atau gambar yang di-reply |
-| `.smeme teks atas \| teks bawah` | Membuat sticker meme dari gambar/video yang dikirim atau di-reply |
-| `.sticker-pool <konteks>` / `.sp <konteks>` | Mengirim sticker yang cocok dengan konteks dari `data/stickers/pool/` |
-| `.anggota` / `.siapa <nama>` | Menampilkan anggota grup yang sudah dikenal bot |
-| `.panggil-aku <nama>` | Menetapkan nama panggilan sendiri di grup |
-| `.jobs` | Melihat job media aktif dan terbaru |
-| `.cancel <id>` | Membatalkan job media milik pengirim command |
-| `.reminder besok jam 8 <pesan>` | Membuat pengingat sekali atau berulang |
-| `.reminders` | Melihat pengingat aktif di chat |
-| `.cancel-reminder <id>` | Membatalkan pengingat milik pembuatnya |
+| `.menu` / `.help` / `.commands` | Show the interactive menu |
+| `.helper` | Show AI usage examples |
+| `.sticker` / `.st` | Create a sticker from an image or reply |
+| `.smeme TOP \| BOTTOM` | Create a meme sticker from an image or video |
+| `.sticker-pool <context>` / `.sp <context>` | Send a context-matching sticker |
+| `.anggota` / `.siapa <name>` | Find known group members |
+| `.panggil-aku <name>` | Set your group nickname |
+| `.jobs` / `.cancel <id>` | View or cancel your media jobs |
+| `.reminder <request>` | Create a one-time or recurring reminder |
+| `.reminders` / `.cancel-reminder <id>` | Manage reminders |
+| `.yt <url>` | Download YouTube media; add `--audio` for audio |
+| `.ig <url>` / `.tt <url>` / `.tw <url>` | Download Instagram, TikTok, or Twitter/X media |
+| `.brainly <question>` | Search for school answers |
+| `.qr <text>` | Create a QR code |
+| `.gambar <prompt>` | Generate or edit an image |
+| `.translate <language> <text>` | Translate text |
+| `.shortlink <url>` / `.weather <city>` | Shorten a URL or check weather |
+| `.anime <title>` | Search anime information |
+| `.web-search <query>` | Search the web |
+| `.4khd-search <query>` | Search 4KHD galleries |
+| `.4khd-latest` / `.4khd-detail <url>` | Browse 4KHD galleries |
 
-Sticker yang masuk dari owner maupun grup otomatis diarsipkan secara deduplicated di `data/stickers/inbox/`, dianalisis AI, lalu dimasukkan ke pool jika analisis berhasil. Riwayat pemakaian per chat mencegah sticker yang sama terus terkirim selama masih ada alternatif relevan.
-| `.yt <url>` | Mengunduh video YouTube; tambahkan `--audio` untuk audio |
-| `.ig <url>` | Mengunduh media Instagram |
-| `.tt <url>` | Mengunduh video TikTok |
-| `.tw <url>` | Mengunduh media Twitter/X |
-| `.brainly <soal>` | Mencari jawaban soal pelajaran |
-| `.qr <teks>` | Membuat QR code |
-| `.gambar <prompt>` | Generate gambar atau edit gambar yang dikirim/di-reply |
-| `.translate <bahasa> <teks>` | Menerjemahkan teks, misalnya `.translate en halo` |
-| `.shortlink <url>` | Memendekkan URL |
-| `.weather <kota>` | Melihat cuaca kota |
-| `.anime <judul>` | Mencari informasi anime |
-| `.web-search <query>` | Mencari informasi di web |
-| `.anime-search <judul>` | Mencari anime download dari Kusonime |
-| `.anime-links <url\|nomor>` | Membuka link download dari URL atau hasil pencarian terakhir |
-| `.4khd-search <query>` | Mencari galeri 4KHD |
-| `.4khd-latest` | Menampilkan galeri 4KHD terbaru |
-| `.4khd-detail <url>` | Membuka atau mengirim gambar dari galeri 4KHD |
+Incoming stickers from the owner and groups are archived, analyzed, and added to the contextual pool when analysis succeeds. Recent usage prevents the same sticker from being repeated unnecessarily.
 
-`web-fetch` digunakan oleh AI untuk membaca halaman hasil pencarian dan tidak ditampilkan sebagai command menu. Tool `pap` khusus owner, tidak ditampilkan di menu, dan ditolak saat dipanggil dari grup.
+### Owner commands
 
-### Command Owner
-
-Command berikut hanya dijalankan untuk persona owner:
-
-| Command | Fungsi |
+| Command | Description |
 |---|---|
-| `/status` | Menampilkan koneksi, uptime, model, dan jumlah tool |
-| `/reload` | Memuat ulang seluruh persona tanpa restart |
-| `/log` | Menampilkan level log aktif |
-| `/memory` | Menampilkan memory untuk chat saat ini |
-| `/clear` | Menghapus memory untuk chat saat ini |
-| `.stickers` | Melihat seluruh sticker beserta tag-nya |
-| `.retag <nomor> tag1,tag2 \| deskripsi` | Memperbarui konteks sticker |
-| `.hapus-sticker <nomor>` | Menghapus sticker dari pool |
+| `/status` | Show connection, uptime, model, and tool count |
+| `/reload` | Reload personas without restarting |
+| `/log` | Show the active log level |
+| `/memory` / `/clear` | View or clear memory for the current chat |
+| `.stickers` | List stickers and their tags |
+| `.retag <number> tags \| description` | Update sticker context |
+| `.hapus-sticker <number>` | Remove a sticker from the pool |
 
-Command owner juga menerima prefix `.` dan `!`, misalnya `.status` atau `!reload`.
+## Cookies
 
-## Cookies Instagram dan Twitter/X
-
-Simpan export Netscape cookies di salah satu nama berikut:
+Optional Netscape cookie files can be stored as:
 
 ```text
 data/cookies/instagram.txt
@@ -184,108 +146,27 @@ data/cookies/twitter.txt
 data/cookies/twitter-cookies.txt
 ```
 
-Cookie hanya dikirim ke domain layanan asal ketika fallback authenticated digunakan. Cookie tidak diteruskan ke API downloader publik. Seluruh isi `data/cookies/` diabaikan Git.
+## Personas and memory
 
-## Persona dan Memory
+Personas are stored in `personas/owner/` and `personas/group/`. Their main files are `AGENT.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, and `USER.md`.
 
-Persona berada di:
+Long-term memory is scoped by chat and stored under `memory/`.
 
-```text
-personas/owner/
-personas/group/
-```
-
-File utama setiap persona:
-
-- `AGENT.md`: aturan dan perilaku agent.
-- `SOUL.md`: gaya bicara dan karakter.
-- `TOOLS.md`: definisi tool untuk AI.
-- `IDENTITY.md` dan `USER.md`: konteks personal owner, tidak disimpan ke Git.
-
-Memory jangka panjang dipisahkan berdasarkan chat:
-
-```text
-memory/MEMORY-owner.md
-memory/MEMORY-group-<hash>.md
-memory/MEMORY-*-archive.md
-```
-
-File memory personal dan archive diabaikan Git agar konteks privat tidak ikut ter-commit.
-
-## Struktur Project
-
-```text
-whatsapp-bot/
-|-- src/
-|   |-- index.ts
-|   |-- core/                 # WhatsApp client, AI bridge, router, types
-|   |-- message/              # Queue dan pipeline pesan
-|   |-- memory/               # Memory per chat dan summarizer
-|   |-- persona/              # Loader persona Markdown
-|   |-- system/               # Config, logger, system command
-|   `-- tools/
-|       |-- registry.ts
-|       |-- executor.ts
-|       `-- handlers/         # Implementasi seluruh tool
-|-- personas/
-|   |-- owner/
-|   `-- group/
-|-- data/
-|   |-- bot.db               # SQLite runtime, diabaikan Git
-|   |-- cookies/              # Cookie privat, diabaikan Git
-|   |-- pap/                  # Dataset PAP owner, diabaikan Git
-|   |-- sessions/             # Auth WhatsApp, diabaikan Git
-|   `-- temp/                 # File sementara
-|-- memory/
-|-- tests/
-|-- .env.example
-`-- package.json
-```
-
-## Build dan Test
+## Build and test
 
 ```bash
 npm run build
 npm test
 ```
 
-Test yang tersedia mencakup isolasi memory, menu owner/grup, serta perlindungan SSRF dasar.
-Test juga mencakup parser reminder WIB, database anggota/reply, otorisasi cancel job/reminder, dan rotasi sticker kontekstual.
-
-## Data Sensitif
-
-Jangan commit file berikut:
-
-- `.env` dan `.env.local`
-- `data/sessions/` dan backup session
-- `data/cookies/`
-- `data/pap/`
-- `personas/owner/IDENTITY.md`
-- `personas/owner/USER.md`
-- file memory owner, grup, dan archive
-
-Aturan tersebut sudah tersedia di `.gitignore`. Jika sebuah credential pernah ter-commit, menghapus file saja tidak cukup; credential tetap harus dicabut atau dirotasi.
-
-## Tech Stack
-
-| Komponen | Teknologi |
-|---|---|
-| WhatsApp | `@itsliaaa/baileys` `0.3.18-final` |
-| Runtime | Node.js + TypeScript ESM |
-| AI | API OpenAI-compatible melalui 9router |
-| Gambar | Cloudflare Workers AI / endpoint image OpenAI-compatible |
-| Logging | Pino |
-| Image processing | Sharp dan wa-sticker-formatter |
-
 ## Troubleshooting
 
-- `401 loggedOut`: session ditolak atau sudah dicabut. Periksa Linked Devices dan session secara manual; bot tidak menghapus session otomatis.
-- Stuck di `logging in`: pairing telah dimulai tetapi registrasi belum selesai. Hentikan bot, periksa Linked Devices, lalu scan satu QR baru dengan koneksi ponsel yang stabil.
-- `Router returned null`: periksa `OWNER_NUMBER`, `OWNER_LID`, `GROUP_JID`, dan `BOT_LID`.
-- Cookie gagal: export ulang cookie Netscape dan pastikan nama file sesuai daftar di atas.
-- Tool gambar gagal: periksa `CF_ACCOUNT_ID`, `CF_API_KEY`, atau `CF_ACCOUNTS`.
-- Bot tidak merespons grup: gunakan command, mention bot, atau reply pesan bot.
+- `401 loggedOut`: check WhatsApp Linked Devices and pair the session again if needed.
+- `Router returned null`: check `OWNER_NUMBER`, `OWNER_LID`, `GROUP_JID`, and `BOT_LID`.
+- The bot does not answer in a group: mention the bot, reply to one of its messages, or use a command.
+- Image tools fail: check `CF_ACCOUNT_ID`, `CF_API_KEY`, or `CF_ACCOUNTS`.
+- Downloader cookies fail: export fresh Netscape cookies and use the filenames above.
 
-## Kolaborasi
+## Indonesian documentation
 
-Project ini dikembangkan oleh Aryoksss dengan bantuan ChatGPT.
+See [README.id.md](README.id.md) for the Indonesian version.
