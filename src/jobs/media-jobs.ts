@@ -2,7 +2,7 @@ import { botDatabase, type MediaJobRecord } from '../storage/database.js'
 import type { ToolContext } from '../core/types.js'
 
 const MEDIA_TOOLS = new Set([
-  'img-gen', 'sticker', 'smeme', 'yt-dl', 'ig-dl', 'tt-dl', 'tw-dl',
+  'img-gen', 'sticker', 'smeme', 'yt-dl', 'ig-dl', 'tt-dl', 'tw-dl', 'threads-dl',
   '4khd-detail', 'pap',
 ])
 

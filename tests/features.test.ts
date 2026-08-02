@@ -11,6 +11,14 @@ import { parseFourkhdSearchIntent } from '../src/tools/handlers/fourkhd.js'
 import { handleSmeme } from '../src/tools/handlers/smeme.js'
 import { decideAutoVoice, prepareVoiceText } from '../src/audio/auto-voice.js'
 import { normalizeForHuTaoVoice, numberToIndonesian } from '../src/audio/text-normalizer.js'
+import { isThreadsUrl } from '../src/tools/handlers/threads-dl.js'
+
+test('Threads downloader accepts only HTTPS Threads URLs', () => {
+  assert.equal(isThreadsUrl('https://www.threads.com/@z33ven/post/DbgbbgYAWSF/media'), true)
+  assert.equal(isThreadsUrl('https://threads.net/@user/post/123'), true)
+  assert.equal(isThreadsUrl('http://www.threads.com/@user/post/123'), false)
+  assert.equal(isThreadsUrl('https://example.com/@user/post/123'), false)
+})
 
 test('reminder parser understands relative, daily, and weekly Indonesian time', () => {
   const now = new Date('2026-08-02T02:00:00+07:00')

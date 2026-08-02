@@ -110,7 +110,7 @@ Semua command menerima prefix `.`, `/`, dan `!`. Prefix pada `PREFIX` digunakan 
 | `.reminder <permintaan>` | Membuat reminder sekali atau berulang |
 | `.reminders` / `.cancel-reminder <id>` | Mengatur reminder |
 | `.yt <url>` | Download media YouTube; tambahkan `--audio` untuk audio |
-| `.ig <url>` / `.tt <url>` / `.tw <url>` | Download media Instagram, TikTok, atau Twitter/X |
+| `.ig <url>` / `.tt <url>` / `.tw <url>` / `.th <url>` | Download media Instagram, TikTok, Twitter/X, atau Threads |
 | `.brainly <soal>` | Mencari jawaban soal pelajaran |
 | `.qr <teks>` | Membuat QR code |
 | `.gambar <prompt>` | Generate atau edit gambar |

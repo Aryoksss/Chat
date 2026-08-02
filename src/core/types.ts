@@ -37,6 +37,7 @@ export interface ToolResult {
   filePath?: string       // Path to file to send (sticker, download, etc.)
   filePaths?: string[]    // Multiple files to send in one call (e.g. photo gallery)
   fileType?: 'sticker' | 'document' | 'video' | 'audio' | 'image'
+  isAnimated?: boolean    // Required by WhatsApp for animated WebP stickers
   caption?: string        // Caption for the file
   error?: string
 }

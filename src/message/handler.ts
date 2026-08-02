@@ -14,6 +14,7 @@ import { audioManager } from '../audio/manager.js'
 import { decideAutoVoice, isExplicitVoiceRequest } from '../audio/auto-voice.js'
 import { get4khdContext, get4khdContinuation, parseFourkhdSearchIntent } from '../tools/handlers/fourkhd.js'
 import { getAnimeContext } from '../tools/handlers/anime-dl.js'
+import { isThreadsUrl } from '../tools/handlers/threads-dl.js'
 import { archiveIncomingSticker, getStickerPoolContext, isStickerInPool, promoteStickerToPool } from '../stickers/archive.js'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -478,7 +479,7 @@ export class MessageHandler {
       return
     }
 
-    // A bare Instagram URL is an explicit download request. Route it directly
+    // A bare media URL is an explicit download request. Route it directly
     // so the model cannot answer from stale conversation context without
     // invoking the downloader.
     const directDownload = this.getDirectDownloadCommand(msg.text)
@@ -662,6 +663,11 @@ export class MessageHandler {
     // Sender identity is injected into the SYSTEM prompt (not the user message),
     // so the AI addresses the sender by name without echoing it back as content.
     systemPrompt += `\n## PENGIRIM PESAN\nPesan ini dikirim oleh: ${senderInfo}.\nIni metadata, BUKAN bagian dari pesan yang harus dibalas. Jangan ulangi baris ini, jangan echo nama/nomor ke balasan.\n`
+
+    const botProfile = client.getBotProfile()
+    if (botProfile) {
+      systemPrompt += `\n## PROFIL WHATSAPP KAMU\nNama profil: ${botProfile.name || '(tidak tersedia)'}\nNomor akun: ${botProfile.phoneNumber || '(tidak tersedia)'}\nLID akun: ${botProfile.lid || '(tidak tersedia)'}\nBio/About: ${botProfile.about || '(tidak tersedia)'}\nFoto profil: ${botProfile.hasProfilePicture ? 'tersedia' : 'tidak tersedia'}\nGunakan profil ini sebagai identitas akun WhatsApp kamu. Jangan mengarang nama, bio, atau detail profil lain.\n`
+    }
 
     // Prepare user text or multi-modal content
     let userContent: any = msg.text || ''
@@ -1057,6 +1063,7 @@ export class MessageHandler {
       case 'ig': case 'instagram': return 'Mau download IG apa? Kasih linknya.'
       case 'tt': case 'tiktok': return 'Mau download TikTok apa? Kasih linknya.'
       case 'tw': case 'twitter': return 'Mau download Twitter/X apa? Kasih linknya.'
+      case 'th': case 'threads': return 'Mau download Threads apa? Kasih linknya.'
       case 'brainly': return 'Soal apa yang mau dicari di Brainly? Tulis soalnya.'
       case 'qr': return 'Mau bikin QR code dari apa? Tulis teks/linknya.'
       case 'gambar': case 'img': case 'image': return 'Mau bikin/edit gambar apa? Tulis prompt-nya (atau reply foto + tulis instruksinya).'
@@ -1152,6 +1159,9 @@ export class MessageHandler {
       if (hostname === 'instagram.com' || hostname.endsWith('.instagram.com')) {
         return { toolName: 'ig-dl', url: value }
       }
+      if (isThreadsUrl(value)) {
+        return { toolName: 'threads-dl', url: value }
+      }
     } catch {
       return null
     }
@@ -1209,6 +1219,7 @@ export class MessageHandler {
       case 'ig': case 'instagram': parsed.url = args[0] || ''; break
       case 'tt': case 'tiktok': parsed.url = args[0] || ''; break
       case 'tw': case 'twitter': parsed.url = args[0] || ''; break
+      case 'th': case 'threads': parsed.url = args[0] || ''; break
       case 'brainly': parsed.query = args.join(' '); break
       case 'qr': parsed.text = args.join(' '); break
       case 'img': case 'image': case 'gambar': parsed.prompt = args.join(' '); break
@@ -1233,6 +1244,7 @@ const PREFIX_MAP: Record<string, string> = {
   'ig': 'ig-dl', 'instagram': 'ig-dl',
   'tt': 'tt-dl', 'tiktok': 'tt-dl',
   'tw': 'tw-dl', 'twitter': 'tw-dl',
+  'th': 'threads-dl', 'threads': 'threads-dl',
   'brainly': 'brainly', 'qr': 'qr',
   'img': 'img-gen', 'image': 'img-gen', 'gambar': 'img-gen',
   'translate': 'translate', 'tr': 'translate',

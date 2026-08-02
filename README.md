@@ -110,7 +110,7 @@ Commands accept `.`, `/`, and `!` prefixes. The configured `PREFIX` is used in m
 | `.reminder <request>` | Create a one-time or recurring reminder |
 | `.reminders` / `.cancel-reminder <id>` | Manage reminders |
 | `.yt <url>` | Download YouTube media; add `--audio` for audio |
-| `.ig <url>` / `.tt <url>` / `.tw <url>` | Download Instagram, TikTok, or Twitter/X media |
+| `.ig <url>` / `.tt <url>` / `.tw <url>` / `.th <url>` | Download Instagram, TikTok, Twitter/X, or Threads media |
 | `.brainly <question>` | Search for school answers |
 | `.qr <text>` | Create a QR code |
 | `.gambar <prompt>` | Generate or edit an image |

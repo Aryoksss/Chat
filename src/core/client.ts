@@ -26,6 +26,15 @@ interface KnownGroup {
   lastSeen: string
 }
 
+export interface BotWhatsAppProfile {
+  jid: string
+  phoneNumber: string
+  lid: string
+  name: string
+  about: string
+  hasProfilePicture: boolean
+}
+
 const logger = pino({ transport: { target: 'pino-pretty' }, level: config.LOG_LEVEL })
 
 export type MessageHandlerFn = (msg: IncomingMessage) => Promise<void>
@@ -47,6 +56,7 @@ export class WhatsAppClient {
   // All Linked-IDs (LID) owned by this bot, so @mentions in groups are detected
   // even when WA reports them as <lid>@lid. Loaded from tctoken-*@lid.json.
   private botLids: string[] = []
+  private botProfile: BotWhatsAppProfile | null = null
   // Message IDs already processed — prevents duplicate replies when Baileys
   // re-emits history/backfill messages on reconnect. Capped to bound memory.
   private processedIds = new Set<string>()
@@ -203,6 +213,57 @@ export class WhatsAppClient {
   /** Set the handler for every incoming message */
   onMessage(handler: MessageHandlerFn): void {
     this.messageHandler = handler
+  }
+
+  /** Return the WhatsApp profile loaded during the last successful connection. */
+  getBotProfile(): BotWhatsAppProfile | null {
+    return this.botProfile
+  }
+
+  private async loadBotProfile(): Promise<void> {
+    const rawJid = String(this.sock?.user?.id || '')
+    const jid = rawJid.replace(/:\d+(?=@)/, '') || (config.BOT_LID ? `${config.BOT_LID}@lid` : '')
+    const phoneNumber = rawJid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '')
+    const lid = this.botLids.find(id => id !== config.OWNER_LID) || config.BOT_LID || ''
+    const profile: BotWhatsAppProfile = {
+      jid,
+      phoneNumber,
+      lid,
+      name: String(this.sock?.user?.name || this.sock?.user?.verifiedName || '').trim(),
+      about: '',
+      hasProfilePicture: false,
+    }
+    // Seed the profile immediately from the connected socket. The optional
+    // network lookups below enrich it without blocking message handling.
+    this.botProfile = profile
+
+    if (jid && typeof this.sock?.fetchStatus === 'function') {
+      try {
+        const result = await this.sock.fetchStatus(jid)
+        const status = Array.isArray(result) ? result[0] : result
+        profile.about = String(status?.status || '').trim()
+      } catch (err: any) {
+        logger.debug({ err: err?.message }, 'Could not load bot WhatsApp about')
+      }
+    }
+
+    if (jid && typeof this.sock?.profilePictureUrl === 'function') {
+      try {
+        const pictureUrl = await this.sock.profilePictureUrl(jid, 'image')
+        profile.hasProfilePicture = Boolean(pictureUrl)
+      } catch {
+        // A private/empty profile picture is normal.
+      }
+    }
+
+    logger.info({
+      jid: profile.jid,
+      phoneNumber: profile.phoneNumber,
+      lid: profile.lid,
+      name: profile.name || '(not available)',
+      hasAbout: Boolean(profile.about),
+      hasProfilePicture: profile.hasProfilePicture,
+    }, 'Bot WhatsApp profile loaded')
   }
 
   private async onGroupParticipantsUpdate(update: any): Promise<void> {
@@ -710,6 +771,7 @@ export class WhatsAppClient {
       // Refresh the set of bot LIDs (needed to detect @mentions in groups).
       this.botLids = await this.loadBotLids()
       logger.info({ botLids: this.botLids }, 'Loaded bot LIDs for group mention detection')
+      await this.loadBotProfile()
       this.syncParticipatingGroups().catch(err => {
         logger.warn({ err: err?.message }, 'Failed to sync participating groups')
       })

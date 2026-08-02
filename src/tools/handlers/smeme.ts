@@ -83,9 +83,9 @@ async function createAnimatedMeme(video: Buffer, overlay: Buffer): Promise<Buffe
   const overlayPath = join(tmpdir(), `smeme_overlay_${token}.png`)
   const encodedPath = join(tmpdir(), `smeme_animated_${token}.webp`)
   const passes: Array<[duration: number, fps: number, quality: number]> = [
-    [6, 15, 50],
-    [5, 12, 40],
-    [4, 10, 30],
+    [6, 6, 90],
+    [6, 6, 85],
+    [5, 8, 80],
   ]
 
   try {
@@ -105,6 +105,7 @@ async function createAnimatedMeme(video: Buffer, overlay: Buffer): Promise<Buffe
           '-map', '[out]',
           '-an',
           '-t', String(Math.min(duration, MAX_DURATION_SEC)),
+          '-c:v', 'libwebp_anim',
           '-loop', '0',
           '-lossless', '0',
           '-q:v', String(quality),
@@ -133,6 +134,7 @@ export async function handleSmeme(args: SmemeArgs = {}, context: any): Promise<{
   text?: string
   filePath?: string
   fileType?: 'sticker'
+  isAnimated?: boolean
   error?: string
 }> {
   let intermediate: string | null = null
@@ -177,7 +179,7 @@ export async function handleSmeme(args: SmemeArgs = {}, context: any): Promise<{
     await writeFile(stickerPath, await sticker.build())
     completed = true
     logger.info({ kind: media.kind, filePath: stickerPath }, 'Sticker meme created')
-    return { success: true, filePath: stickerPath, fileType: 'sticker', text: 'Sticker meme dibuat!' }
+    return { success: true, filePath: stickerPath, fileType: 'sticker', isAnimated: media.kind === 'video', text: 'Sticker meme dibuat!' }
   } catch (err: any) {
     return { success: false, error: `Gagal bikin sticker meme: ${err.message}` }
   } finally {

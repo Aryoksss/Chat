@@ -6,6 +6,7 @@ import { handleYtDownload } from './handlers/yt-dl.js'
 import { handleIgDownload } from './handlers/ig-dl.js'
 import { handleTtDownload } from './handlers/tt-dl.js'
 import { handleTwDownload } from './handlers/tw-dl.js'
+import { handleThreadsDownload } from './handlers/threads-dl.js'
 import { handleBrainly } from './handlers/brainly.js'
 import { handleQrGenerate } from './handlers/qr.js'
 import { handleImageGen } from './handlers/image-gen.js'
@@ -29,6 +30,7 @@ export function registerAllTools() {
     { name: 'ig-dl', desc: 'Download Instagram', params: { url: { type: 'string' } }, handler: handleIgDownload },
     { name: 'tt-dl', desc: 'Download TikTok', params: { url: { type: 'string' } }, handler: handleTtDownload },
     { name: 'tw-dl', desc: 'Download Twitter/X', params: { url: { type: 'string' } }, handler: handleTwDownload },
+    { name: 'threads-dl', desc: 'Download video atau media Threads', params: { url: { type: 'string' } }, handler: handleThreadsDownload },
     { name: 'brainly', desc: 'Cari jawaban soal pelajaran/PR dari Brainly (HANYA untuk soal sekolah)', params: { query: { type: 'string' } }, handler: handleBrainly },
     { name: 'qr', desc: 'Bikin QR code', params: { text: { type: 'string' } }, handler: handleQrGenerate },
     { name: 'img-gen', desc: 'Generate gambar baru dari prompt, atau EDIT gambar yang dikirim/di-reply (FLUX AI). Default realistic; anti-anime kecuali user minta anime.', params: { prompt: { type: 'string' } }, handler: handleImageGen },

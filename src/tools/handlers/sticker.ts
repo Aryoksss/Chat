@@ -51,9 +51,9 @@ async function compressAnimated(buf: Buffer, kind: 'gif' | 'video'): Promise<Buf
 
   // Passes: [duration, fps, quality]
   const passes: Array<[number, number, number]> = [
-    [6, 15, 50],
-    [5, 12, 40],
-    [4, 10, 30],
+    [6, 6, 90],
+    [6, 6, 85],
+    [5, 8, 80],
   ]
 
   try {
@@ -63,7 +63,8 @@ async function compressAnimated(buf: Buffer, kind: 'gif' | 'video'): Promise<Buf
         await execFileP('ffmpeg', [
           '-y', '-i', inPath,
           '-t', String(dur),
-          '-vf', `fps=${fps},scale=${MAX_SIZE}:${MAX_SIZE}:force_original_aspect_ratio=decrease,pad=${MAX_SIZE}:${MAX_SIZE}:(ow-iw)/2:(oh-ih)/2:color=black@0`,
+          '-vf', `fps=${fps},scale=${MAX_SIZE}:${MAX_SIZE}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${MAX_SIZE}:${MAX_SIZE}:(ow-iw)/2:(oh-ih)/2:color=black@0,format=yuva420p`,
+          '-c:v', 'libwebp_anim',
           '-loop', '0',
           '-lossless', '0',
           '-q:v', String(q),
@@ -91,7 +92,7 @@ async function compressAnimated(buf: Buffer, kind: 'gif' | 'video'): Promise<Buf
   }
 }
 
-export async function handleSticker(args: StickerArgs, context: any): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: 'sticker' | 'document' | 'video' | 'audio' | 'image'; caption?: string; error?: string }> {
+export async function handleSticker(args: StickerArgs, context: any): Promise<{ success: boolean; text?: string; filePath?: string; fileType?: 'sticker' | 'document' | 'video' | 'audio' | 'image'; isAnimated?: boolean; caption?: string; error?: string }> {
   try {
     let buffer: Buffer | null = null
 
@@ -171,6 +172,7 @@ export async function handleSticker(args: StickerArgs, context: any): Promise<{ 
       text: `Sticker berhasil dibuat!`,
       filePath: outPath,
       fileType: 'sticker',
+      isAnimated: kind !== 'image',
       caption: `${author}|${pack}`, // carried through to executor (metadata already in file)
     }
   } catch (err: any) {

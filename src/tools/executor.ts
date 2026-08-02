@@ -55,7 +55,6 @@ export class ToolExecutor {
             for (const fp of result.filePaths) {
               const sent = await context.sock.sendMessage(context.jid, {
                 [result.fileType || 'document']: { url: fp },
-                ...(result.caption ? { caption: result.caption } : {}),
               }, context.rawMessage ? { quoted: context.rawMessage } : undefined)
               if (sent?.key?.id) botDatabase.rememberOutgoing(context.jid, sent.key.id, result.fileType || 'document')
             }
@@ -73,20 +72,15 @@ export class ToolExecutor {
             if (result.fileType === 'sticker') {
               const sent = await context.sock.sendMessage(context.jid, {
                 sticker: { url: result.filePath },
+                isAnimated: result.isAnimated === true,
               }, context.rawMessage ? { quoted: context.rawMessage } : undefined)
               if (sent?.key?.id) botDatabase.rememberOutgoing(context.jid, sent.key.id, 'sticker')
               context.suppressTextResponse = true
             } else {
               const sent = await context.sock.sendMessage(context.jid, {
                 [result.fileType || 'document']: { url: result.filePath },
-                ...(result.caption ? { caption: result.caption } : {}),
               }, context.rawMessage ? { quoted: context.rawMessage } : undefined)
               if (sent?.key?.id) botDatabase.rememberOutgoing(context.jid, sent.key.id, result.fileType || 'document')
-              // img-gen already delivers the requested image; do not send a
-              // redundant confirmation message afterward.
-              if (toolName === 'img-gen' && result.fileType === 'image') {
-                context.suppressTextResponse = true
-              }
             }
           } catch (sendErr) {
             sendFailed = true
@@ -94,6 +88,11 @@ export class ToolExecutor {
           } finally {
             await this.cleanupTempFile(result.filePath)
           }
+        }
+        // A successful media tool already delivered the actual result. Do not
+        // send a second confirmation text or a media caption afterward.
+        if (result.filePath || (result.filePaths && result.filePaths.length > 0)) {
+          context.suppressTextResponse = true
         }
         if (sendFailed) {
           mediaJobManager.fail(context, 'Media berhasil dibuat tetapi gagal dikirim')

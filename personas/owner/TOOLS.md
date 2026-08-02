@@ -38,6 +38,11 @@ Description: Download video atau gambar dari Twitter/X. Kasih link tweet-nya.
 Parameters:
 - url (string, required) — URL tweet yang mau didownload
 
+## threads-dl
+Description: Download video atau media dari Threads. Kasih link post Threads-nya.
+Parameters:
+- url (string, required) — URL post Threads (threads.com atau threads.net)
+
 ## brainly
 Description: Cari jawaban soal pelajaran dari Brainly.
 Parameters:

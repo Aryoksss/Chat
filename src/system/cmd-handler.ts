@@ -388,6 +388,8 @@ export class CommandHandler {
         return { section: 'Media', title: 'TikTok', command: `${prefix}tt <url>` }
       case 'tw-dl':
         return { section: 'Media', title: 'Twitter/X', command: `${prefix}tw <url>` }
+      case 'threads-dl':
+        return { section: 'Media', title: 'Threads', command: `${prefix}th <url>` }
       case 'brainly':
         return { section: 'AI & Search', title: 'Brainly', command: `${prefix}brainly <soal>` }
       case 'web-search':
