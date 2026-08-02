@@ -214,6 +214,18 @@ export class MessageHandler {
     // Debug log before routing
     logger.info({ sender: msg.sender, ownerEnv: config.OWNER_NUMBER }, 'DEBUG: Entering router')
 
+    // A reply from another bot can look exactly like a user reply to our bot.
+    // Drop it before sticker archiving or AI processing so two bots cannot start
+    // a reply loop or keep exchanging contextual stickers.
+    if (msg.isGroup && config.IGNORED_BOT_IDS.includes(msg.sender)) {
+      logger.info({
+        jid: msg.jid,
+        sender: msg.sender,
+        text: msg.text?.slice(0, 80),
+      }, 'Group message ignored (known bot sender)')
+      return
+    }
+
     // Archive incoming stickers before routing. This intentionally also runs
     // for groups outside the allowlist, so the pool can collect stickers from
     // every group the account belongs to without making the bot respond there.

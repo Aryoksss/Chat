@@ -22,6 +22,13 @@ function booleanEnv(name: string, fallback: boolean): boolean {
   return fallback
 }
 
+function idListEnv(name: string): string[] {
+  return (process.env[name] || '')
+    .split(',')
+    .map(value => value.replace(/[^0-9]/g, ''))
+    .filter(Boolean)
+}
+
 export const config = {
   // === 9router AI ===
   NINE_ROUTER_API_KEY: process.env.NINE_ROUTER_API_KEY || '',
@@ -57,6 +64,9 @@ export const config = {
   // Optional: the bot's Linked-ID (LID), the internal WA id that may appear in
   // mentionedJid as "<lid>@lid". Needed to detect mentions made via the LID format.
   BOT_LID: process.env.BOT_LID || '',
+  // Nomor/LID bot lain yang harus selalu diabaikan agar tidak terjadi loop
+  // balas-membalas atau adu sticker di grup.
+  IGNORED_BOT_IDS: idListEnv('IGNORED_BOT_IDS'),
   GROUP_JID: process.env.GROUP_JID || '',              // e.g. "1234567890-123456@g.us"
   SESSION_DIR: path.resolve(ROOT, process.env.SESSION_DIR || 'data/sessions'),
 

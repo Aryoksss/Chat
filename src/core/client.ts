@@ -911,11 +911,14 @@ export class WhatsAppClient {
     const ownerNumber = config.OWNER_NUMBER
     const ownerLid = config.OWNER_LID
     const botLid = config.BOT_LID
-    // Include the socket's own id, owner number + owner LID, configured BOT_LID,
-    // and every bot LID loaded from tctoken files — so group @mentions are
-    // recognized even when WA reports them as an LID (owner or bot).
-    const knownIds = [botId, ownerNumber, ownerLid, botLid, ...this.botLids].filter(Boolean)
     const normalize = (s: string) => s.replace(/[^0-9]/g, '')
+    // Only actual bot IDs may make a group message count as addressed. The
+    // owner's ID must stay out of this list: otherwise replying to the owner's
+    // own message looks like replying to the bot and triggers an unwanted reply.
+    const ownerIds = [ownerNumber, ownerLid].filter(Boolean).map(normalize)
+    const knownIds = [botId, botLid, ...this.botLids]
+      .filter(Boolean)
+      .filter(id => !ownerIds.includes(normalize(id)))
     const isMentioningBot = (jid?: string | null) => {
       if (!jid) return false
       const n = normalize(jid)

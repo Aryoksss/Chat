@@ -147,6 +147,11 @@ test('Hu Tao TTS normalizes Indonesian numbers, money, dates, times, and ranges'
   assert.equal(normalizeForHuTaoVoice('Pilih nomor 1-3 dan urutan ke-2.'), 'Pilih nomor satu sampai tiga dan urutan ke dua.')
 })
 
+test('bot ignore-list config is available for loop prevention', async () => {
+  const { config } = await import('../src/system/config.js')
+  assert.ok(Array.isArray(config.IGNORED_BOT_IDS))
+})
+
 test('smeme turns a video into an animated WebP sticker', async (t) => {
   try {
     execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' })
