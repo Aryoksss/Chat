@@ -64,7 +64,7 @@ export const config = {
   WHISPER_API_URL: process.env.WHISPER_API_URL || '',      // Endpoint for STT
 
   // === Hu Tao TTS (Edge-TTS + RVC bash script) ===
-  // Path ke script bash hutao-voice-note. Default cek ~/.openclaw/tools/.
+  // Path ke script bash hutao-voice-note. Default: scripts/hutao-voice-note.
   HUTAO_VOICE_SCRIPT: process.env.HUTAO_VOICE_SCRIPT || '',
   HUTAO_AUTO_VOICE_ENABLED: booleanEnv('HUTAO_AUTO_VOICE_ENABLED', true),
   HUTAO_AUTO_VOICE_CHANCE: Math.max(0, Math.min(1, numberEnv('HUTAO_AUTO_VOICE_CHANCE', 0.18))),

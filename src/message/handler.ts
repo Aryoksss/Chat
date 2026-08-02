@@ -12,7 +12,7 @@ import { cmdHandler } from '../system/cmd-handler.js'
 import { toolExecutor } from '../tools/executor.js'
 import { audioManager } from '../audio/manager.js'
 import { decideAutoVoice, isExplicitVoiceRequest } from '../audio/auto-voice.js'
-import { get4khdContext, get4khdContinuation } from '../tools/handlers/fourkhd.js'
+import { get4khdContext, get4khdContinuation, parseFourkhdSearchIntent } from '../tools/handlers/fourkhd.js'
 import { getAnimeContext } from '../tools/handlers/anime-dl.js'
 import { archiveIncomingSticker, getStickerPoolContext, isStickerInPool, promoteStickerToPool } from '../stickers/archive.js'
 import { tmpdir } from 'os'
@@ -497,6 +497,27 @@ export class MessageHandler {
       return
     }
 
+    // Natural 4KHD searches are deterministic. This prevents stale persona
+    // instructions from being emitted as shell commands instead of tool calls.
+    const fourkhdSearch = parseFourkhdSearchIntent(msg.text)
+    if (fourkhdSearch) {
+      logger.info({ jid: msg.jid, toolName: fourkhdSearch.toolName, args: fourkhdSearch.args }, 'Auto-routing 4KHD search')
+      const toolContext = {
+        sock: client.sock,
+        jid: msg.jid,
+        participant: msg.participant,
+        rawMessage: msg.raw,
+        mediaJobId: msg.mediaJobId,
+        suppressTextResponse: false,
+      }
+      await client.sendPresence(msg.jid, 'composing')
+      const result = await toolExecutor.executeToolCall(fourkhdSearch.toolName, fourkhdSearch.args, toolContext)
+      if (result.trim() && !toolContext.suppressTextResponse) {
+        await client.sendText(msg.jid, result, msg.raw)
+      }
+      return
+    }
+
     // 4KHD follow-ups are deterministic and should not depend on the model
     // remembering numeric selections or the next photo offset. Handle common
     // requests locally: "kirim no 6, 3 foto", "kirim no 6", and
@@ -726,6 +747,13 @@ export class MessageHandler {
 
       // Debug log dulu sebelum dikirim
       logger.info({ response }, 'RESPONSE-before-send')
+
+      // Never leak legacy agent syntax or local filesystem commands into chat.
+      if (/\bopenclaw\b|(?:^|\n)\s*exec\s+\/|MEDIA:\s*\//i.test(response || '')) {
+        logger.error({ jid: msg.jid }, 'Suppressed leaked internal command from AI response')
+        await client.sendText(msg.jid, 'Tool yang kepilih tadi keliru. Coba ulangi permintaannya ya.', msg.raw)
+        return
+      }
 
       if (toolContext.suppressTextResponse) {
         return

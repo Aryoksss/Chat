@@ -108,6 +108,15 @@ export class BotDatabase {
         last_sent_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(status, due_at);
+
+      CREATE TABLE IF NOT EXISTS tool_contexts (
+        jid TEXT NOT NULL,
+        tool TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (jid, tool)
+      );
+      CREATE INDEX IF NOT EXISTS idx_tool_contexts_updated ON tool_contexts(updated_at);
     `)
     const memberColumns = this.db.prepare('PRAGMA table_info(group_members)').all()
       .map(row => rowValue<string>(row, 'name'))
@@ -118,6 +127,7 @@ export class BotDatabase {
     this.db.prepare('DELETE FROM outgoing_messages WHERE created_at < ?').run(cutoff)
     this.db.prepare(`UPDATE media_jobs SET status='failed', error='Bot restart sebelum job selesai', updated_at=? WHERE status IN ('queued','running')`).run(Date.now())
     this.db.prepare(`UPDATE reminders SET status='active' WHERE status='processing'`).run()
+    this.db.prepare('DELETE FROM tool_contexts WHERE updated_at < ?').run(Date.now() - 24 * 60 * 60 * 1000)
   }
 
   upsertMember(groupJid: string, memberJid: string, displayName: string, message: string, countMessage = true): void {
@@ -275,6 +285,36 @@ export class BotDatabase {
   cancelReminder(jid: string, sender: string, id: string): number {
     const result = this.db.prepare(`UPDATE reminders SET status='cancelled' WHERE jid=? AND sender=? AND id LIKE ? AND status IN ('active','processing')`).run(jid, sender, `${id}%`)
     return Number(result.changes)
+  }
+
+  setToolContext(jid: string, tool: string, payload: unknown): void {
+    if (!jid || !tool) return
+    this.db.prepare(`
+      INSERT INTO tool_contexts(jid, tool, payload, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(jid, tool) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at
+    `).run(jid, tool, JSON.stringify(payload), Date.now())
+  }
+
+  getToolContext<T>(jid: string, tool: string, maxAgeMs: number): T | null {
+    if (!jid || !tool) return null
+    const row = this.db.prepare('SELECT payload, updated_at FROM tool_contexts WHERE jid=? AND tool=?').get(jid, tool)
+    if (!row) return null
+    const updatedAt = Number(rowValue<number>(row, 'updated_at'))
+    if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > maxAgeMs) {
+      this.db.prepare('DELETE FROM tool_contexts WHERE jid=? AND tool=?').run(jid, tool)
+      return null
+    }
+    try {
+      return JSON.parse(rowValue<string>(row, 'payload')) as T
+    } catch {
+      this.db.prepare('DELETE FROM tool_contexts WHERE jid=? AND tool=?').run(jid, tool)
+      return null
+    }
+  }
+
+  clearToolContext(tool: string, jid?: string): void {
+    if (jid) this.db.prepare('DELETE FROM tool_contexts WHERE jid=? AND tool=?').run(jid, tool)
+    else this.db.prepare('DELETE FROM tool_contexts WHERE tool=?').run(tool)
   }
 
   private mapReminder(row: unknown): ReminderRecord {

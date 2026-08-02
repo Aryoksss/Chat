@@ -14,20 +14,24 @@
 // tanpa dependensi tambahan (cheerio/axios).
 
 import { logger } from '../../system/logger.js'
+import { botDatabase } from '../../storage/database.js'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
 type FourkhdPost = { url: string; title: string; size: string | null; photoCount: number | null }
 const searchByJid = new Map<string, { posts: FourkhdPost[]; updatedAt: number }>()
-const detailByJid = new Map<string, {
+type FourkhdDetailContext = {
   url: string
   title: string
   total: number
   nextFrom: number
   updatedAt: number
-}>()
+}
+const detailByJid = new Map<string, FourkhdDetailContext>()
 const SEARCH_CONTEXT_TTL_MS = 15 * 60 * 1000
 const DEFAULT_CONTEXT_KEY = '__default__'
+const SEARCH_CONTEXT_NAME = '4khd-search'
+const DETAIL_CONTEXT_NAME = '4khd-detail'
 
 function contextKey(context?: { jid?: string }): string {
   return context?.jid || DEFAULT_CONTEXT_KEY
@@ -35,7 +39,14 @@ function contextKey(context?: { jid?: string }): string {
 
 function getPosts(jid?: string): FourkhdPost[] {
   const key = jid || DEFAULT_CONTEXT_KEY
-  const entry = searchByJid.get(key)
+  let entry = searchByJid.get(key)
+  if (!entry) {
+    const stored = botDatabase.getToolContext<{ posts: FourkhdPost[] }>(key, SEARCH_CONTEXT_NAME, SEARCH_CONTEXT_TTL_MS)
+    if (stored?.posts?.length) {
+      entry = { posts: stored.posts, updatedAt: Date.now() }
+      searchByJid.set(key, entry)
+    }
+  }
   if (!entry || Date.now() - entry.updatedAt > SEARCH_CONTEXT_TTL_MS) {
     searchByJid.delete(key)
     return []
@@ -280,7 +291,16 @@ export function get4khdContinuation(jid?: string): {
   nextFrom: number
 } | null {
   const key = jid || DEFAULT_CONTEXT_KEY
-  const entry = detailByJid.get(key)
+  let entry = detailByJid.get(key)
+  if (!entry) {
+    const stored = botDatabase.getToolContext<Omit<FourkhdDetailContext, 'updatedAt'>>(
+      key, DETAIL_CONTEXT_NAME, SEARCH_CONTEXT_TTL_MS,
+    )
+    if (stored?.url) {
+      entry = { ...stored, updatedAt: Date.now() }
+      detailByJid.set(key, entry)
+    }
+  }
   if (!entry || Date.now() - entry.updatedAt > SEARCH_CONTEXT_TTL_MS || entry.nextFrom > entry.total) {
     if (entry) detailByJid.delete(key)
     return null
@@ -293,10 +313,39 @@ export function clear4khdResults(jid?: string): void {
   if (jid) {
     searchByJid.delete(jid)
     detailByJid.delete(jid)
+    botDatabase.clearToolContext(SEARCH_CONTEXT_NAME, jid)
+    botDatabase.clearToolContext(DETAIL_CONTEXT_NAME, jid)
   } else {
     searchByJid.clear()
     detailByJid.clear()
+    botDatabase.clearToolContext(SEARCH_CONTEXT_NAME)
+    botDatabase.clearToolContext(DETAIL_CONTEXT_NAME)
   }
+}
+
+export type FourkhdSearchIntent =
+  | { toolName: '4khd-search'; args: { query: string } }
+  | { toolName: '4khd-latest'; args: Record<string, never> }
+
+/** Parse natural chat such as "cariin Machi di 4khd" without involving the AI. */
+export function parseFourkhdSearchIntent(text: string): FourkhdSearchIntent | null {
+  const value = (text || '').replace(/@\d+/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!/\b4khd(?:\.com)?\b/i.test(value)) return null
+  if (!/\b(cari(?:in|kan)?|nyari|search|cek|lihat|latest|terbaru)\b/i.test(value)) return null
+
+  if (/\b(latest|terbaru|postingan\s+baru)\b/i.test(value)) {
+    return { toolName: '4khd-latest', args: {} }
+  }
+
+  const query = value
+    .replace(/\b4khd(?:\.com)?\b/gi, ' ')
+    .replace(/\b(?:tolong|dong|coba|minta|carikan|cariin|cari|nyari|search|cek|lihat|di|dari|untuk)\b/gi, ' ')
+    .replace(/[.,!?;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!query || query.length > 100) return null
+  return { toolName: '4khd-search', args: { query } }
 }
 
 interface SearchArgs {
@@ -313,20 +362,31 @@ export async function handleFourkhdSearch(args: SearchArgs, context?: { jid?: st
     return { success: false, text: 'Mau cari apa di 4KHD? Kasih kata kunci kak!' }
   }
 
-  const posts = await scrapeSearch(query, page)
+  let posts = await scrapeSearch(query, page)
+  // The old integration displayed around 20 choices. Load the next result page
+  // for the first search so natural follow-ups such as "kirim no 20" continue
+  // to work when the site has enough matching posts.
+  if (page === 1) {
+    const nextPage = await scrapeSearch(query, 2)
+    posts = dedupe([...posts, ...nextPage])
+  }
   if (!posts.length) {
     return { success: false, text: `Gak nemu hasil di 4KHD untuk "${query}". Coba kata kunci lain kak!` }
   }
 
   // Simpan hasil biar 4khd-detail bisa dipanggil dengan `index` tanpa URL.
-  searchByJid.set(contextKey(context), { posts, updatedAt: Date.now() })
-  detailByJid.delete(contextKey(context))
+  const key = contextKey(context)
+  searchByJid.set(key, { posts, updatedAt: Date.now() })
+  detailByJid.delete(key)
+  botDatabase.setToolContext(key, SEARCH_CONTEXT_NAME, { posts })
+  botDatabase.clearToolContext(DETAIL_CONTEXT_NAME, key)
 
-  const lines = posts.slice(0, 10).map((p, i) => formatPost(p, i + 1))
+  const shown = posts.slice(0, 20)
+  const lines = shown.map((p, i) => formatPost(p, i + 1))
   const total = posts.length
   return {
     success: true,
-    text: `🔍 *4KHD — Hasil untuk "${query}"* (hal ${page}, ${total} post)\n\n${lines.join('\n\n')}\n\n` +
+    text: `🔍 *4KHD — Hasil untuk "${query}"* (${shown.length} dari ${total} post)\n\n${lines.join('\n\n')}\n\n` +
           `Balas dengan nomor (mis. "kirim no 2") buat buka post itu, atau sebut judulnya.`,
   }
 }
@@ -344,8 +404,11 @@ export async function handleFourkhdLatest(args: LatestArgs, context?: { jid?: st
   }
 
   // Simpan hasil biar 4khd-detail bisa dipanggil dengan nomor pilihan.
-  searchByJid.set(contextKey(context), { posts, updatedAt: Date.now() })
-  detailByJid.delete(contextKey(context))
+  const key = contextKey(context)
+  searchByJid.set(key, { posts, updatedAt: Date.now() })
+  detailByJid.delete(key)
+  botDatabase.setToolContext(key, SEARCH_CONTEXT_NAME, { posts })
+  botDatabase.clearToolContext(DETAIL_CONTEXT_NAME, key)
 
   const lines = posts.slice(0, 10).map((p, i) => formatPost(p, i + 1))
   return {
@@ -403,6 +466,9 @@ export async function handleFourkhdDetail(args: DetailArgs, context?: { jid?: st
   } else {
     chosen = posts[selectPost - 1]
     if (!chosen) {
+      if (posts.length > 0) {
+        return { success: false, text: `Nomor ${selectPost} tidak ada di hasil terakhir. Pilih nomor 1 sampai ${posts.length}.` }
+      }
       return { success: false, text: 'Belum ada hasil pencarian 4KHD. Cari dulu dengan 4khd-search, atau kasih URL post-nya langsung.' }
     }
     url = chosen.url
@@ -431,6 +497,12 @@ export async function handleFourkhdDetail(args: DetailArgs, context?: { jid?: st
     nextFrom: Math.max(1, fromIndex + 1),
     updatedAt: Date.now(),
   })
+  botDatabase.setToolContext(contextKey(context), DETAIL_CONTEXT_NAME, {
+    url,
+    title: detailTitle,
+    total: images.length,
+    nextFrom: Math.max(1, fromIndex + 1),
+  })
 
   // Mode download: kirim 1..N foto (mulai dari foto `from`).
   if (wantDownload > 0) {
@@ -453,6 +525,12 @@ export async function handleFourkhdDetail(args: DetailArgs, context?: { jid?: st
       total,
       nextFrom: lastNum + 1,
       updatedAt: Date.now(),
+    })
+    botDatabase.setToolContext(contextKey(context), DETAIL_CONTEXT_NAME, {
+      url,
+      title: detailTitle,
+      total,
+      nextFrom: lastNum + 1,
     })
     const nextHint = `${detailTitle} — kirim foto ${lastNum + 1}..${Math.min(lastNum + wantDownload, total)} kalau mau lanjut.`
     return {

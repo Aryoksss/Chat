@@ -16,29 +16,21 @@ set -euo pipefail
 SCRIPT=""
 for c in \
   "${HUTAO_VOICE_SCRIPT:-}" \
-  "$HOME/.openclaw/tools/hutao-voice-note" \
-  "$HOME/.openclaw/tools/hutao-rvc/hutao-voice-note"
+  "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/hutao-voice-note"
 do
   if [[ -n "$c" && -f "$c" ]]; then SCRIPT="$c"; break; fi
 done
 
 if [[ -z "$SCRIPT" ]]; then
   echo "❌ Script hutao-voice-note TIDAK ditemukan."
-  echo "   Set HUTAO_VOICE_SCRIPT di .env, atau letakkan script di:"
-  echo "   - ~/.openclaw/tools/hutao-voice-note"
-  echo "   - ~/.openclaw/tools/hutao-rvc/hutao-voice-note"
+  echo "   Set HUTAO_VOICE_SCRIPT di .env atau gunakan scripts/hutao-voice-note."
   exit 1
 fi
 echo "✅ Script ditemukan: $SCRIPT"
 
 # --- 2. Cek prasyarat internal script (ROOT dari script ini) ---
-ROOT_HINT=""
-# Bukti: teks script menyebut lokasi ROOT (mudah-mudahan hutao-rvc)
-if grep -q 'hutao-rvc' "$SCRIPT"; then
-  ROOT_HINT="$HOME/.openclaw/tools/hutao-rvc"
-elif grep -q 'ROOT=' "$SCRIPT"; then
-  ROOT_HINT="$(grep -oP 'ROOT="\K[^"]+' "$SCRIPT" | head -1 || true)"
-fi
+PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_HINT="${HUTAO_RVC_ROOT:-$PROJECT_ROOT/data/hutao-rvc}"
 
 if [[ -n "$ROOT_HINT" ]]; then
   echo ""

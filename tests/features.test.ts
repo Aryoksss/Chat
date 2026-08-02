@@ -7,8 +7,10 @@ import { tmpdir } from 'node:os'
 import { BotDatabase } from '../src/storage/database.js'
 import { parseReminderRequest } from '../src/reminders/parser.js'
 import { selectByContext, type StickerPoolEntry } from '../src/tools/handlers/sticker-pool.js'
+import { parseFourkhdSearchIntent } from '../src/tools/handlers/fourkhd.js'
 import { handleSmeme } from '../src/tools/handlers/smeme.js'
 import { decideAutoVoice, prepareVoiceText } from '../src/audio/auto-voice.js'
+import { normalizeForHuTaoVoice, numberToIndonesian } from '../src/audio/text-normalizer.js'
 
 test('reminder parser understands relative, daily, and weekly Indonesian time', () => {
   const now = new Date('2026-08-02T02:00:00+07:00')
@@ -44,6 +46,12 @@ test('database persists member directory and outgoing reply IDs', () => {
     db.close()
     db = new BotDatabase(file)
     assert.equal(db.isOutgoing('group@g.us', 'MSG-1'), true)
+    db.setToolContext('owner@lid', '4khd-search', { posts: [{ title: 'Machi' }] })
+    db.close()
+    db = new BotDatabase(file)
+    assert.deepEqual(db.getToolContext('owner@lid', '4khd-search', 60_000), {
+      posts: [{ title: 'Machi' }],
+    })
   } finally {
     db.close()
     rmSync(dir, { recursive: true, force: true })
@@ -76,6 +84,22 @@ test('sticker selector matches emotion and avoids a recently used sticker', () =
   ]
   assert.equal(selectByContext(entries, 'aku marah banget')?.entry.file, '/pool/angry.webp')
   assert.equal(selectByContext(entries, 'wkwk ngakak', ['funny-a.webp'])?.entry.file, '/pool/funny-b.webp')
+})
+
+test('natural 4KHD searches route directly to native tools', () => {
+  assert.deepEqual(parseFourkhdSearchIntent('Cariin machi di 4khd'), {
+    toolName: '4khd-search',
+    args: { query: 'machi' },
+  })
+  assert.deepEqual(parseFourkhdSearchIntent('@5846088061042 cariin di 4khd Furina'), {
+    toolName: '4khd-search',
+    args: { query: 'Furina' },
+  })
+  assert.deepEqual(parseFourkhdSearchIntent('cek terbaru di 4khd'), {
+    toolName: '4khd-latest',
+    args: {},
+  })
+  assert.equal(parseFourkhdSearchIntent('cariin machi'), null)
 })
 
 test('Hu Tao auto voice always handles VN and explicit requests', () => {
@@ -111,6 +135,16 @@ test('Hu Tao automatic voice uses chance, cooldown, and avoids sticker overlap',
   assert.equal(decideAutoVoice({ ...base, lastVoiceAt: 900_000, random: () => 0 }).send, false)
   assert.equal(decideAutoVoice({ ...base, autoStickerSent: true, random: () => 0 }).send, false)
   assert.equal(decideAutoVoice({ ...base, messageText: 'tolong debug kode ini', random: () => 0 }).send, false)
+})
+
+test('Hu Tao TTS normalizes Indonesian numbers, money, dates, times, and ranges', () => {
+  assert.equal(numberToIndonesian(25), 'dua puluh lima')
+  assert.equal(numberToIndonesian(25000), 'dua puluh lima ribu')
+  assert.equal(
+    normalizeForHuTaoVoice('Kirim 25 foto seharga Rp 25.000 pada 02/08/2026 jam 04:30, diskon 10%.'),
+    'Kirim dua puluh lima foto seharga dua puluh lima ribu rupiah pada dua Agustus dua ribu dua puluh enam jam empat lewat tiga puluh menit, diskon sepuluh persen.',
+  )
+  assert.equal(normalizeForHuTaoVoice('Pilih nomor 1-3 dan urutan ke-2.'), 'Pilih nomor satu sampai tiga dan urutan ke dua.')
 })
 
 test('smeme turns a video into an animated WebP sticker', async (t) => {

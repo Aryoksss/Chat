@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+ROOT="${HUTAO_RVC_ROOT:-$PROJECT_ROOT/data/hutao-rvc}"
+PYTHON="$ROOT/.venv/bin/python"
+MODEL="$ROOT/models/extracted/hutao-jp/hutao-jp.pth"
+INDEX="$ROOT/models/extracted/hutao-jp/added_IVF1662_Flat_nprobe_1.index"
+TEXT=""
+OUTPUT=""
+
+while (($#)); do
+  case "$1" in
+    --text) TEXT="${2:-}"; shift 2 ;;
+    --output) OUTPUT="${2:-}"; shift 2 ;;
+    -h|--help)
+      echo 'Usage: hutao-voice-note --text "..." --output file.ogg'
+      exit 0
+      ;;
+    *) echo "Unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+if [[ -z "$TEXT" || -z "$OUTPUT" ]]; then
+  echo "--text and --output are required" >&2
+  exit 2
+fi
+if [[ ! -x "$PYTHON" || ! -f "$MODEL" || ! -f "$INDEX" ]]; then
+  echo "Hu Tao RVC runtime/model is not installed in $ROOT" >&2
+  exit 1
+fi
+
+WORK_DIR="$(mktemp -d /tmp/hutao-voice-note.XXXXXX)"
+trap 'rm -rf -- "$WORK_DIR"' EXIT
+
+"$PYTHON" -m edge_tts --voice ja-JP-NanamiNeural --rate=+4% --pitch=+6Hz \
+  --text "$TEXT" --write-media "$WORK_DIR/base.mp3"
+ffmpeg -hide_banner -loglevel error -y -i "$WORK_DIR/base.mp3" \
+  -ar 40000 -ac 1 "$WORK_DIR/base.wav"
+
+"$PYTHON" -m rvc_python cli \
+  -i "$WORK_DIR/base.wav" \
+  -o "$WORK_DIR/hutao.wav" \
+  -mp "$MODEL" \
+  -ip "$INDEX" \
+  -de cpu:0 \
+  -me harvest \
+  -v v1 \
+  -ir 0.75 \
+  -fr 3 \
+  -rmr 0.25 \
+  -pr 0.33 \
+  -pi 0
+
+if [[ ! -s "$WORK_DIR/hutao.wav" ]]; then
+  echo "Hu Tao RVC did not produce audio" >&2
+  exit 1
+fi
+
+ffmpeg -hide_banner -loglevel error -y -i "$WORK_DIR/hutao.wav" \
+  -c:a libopus -b:a 48k -application voip "$OUTPUT"
