@@ -9,6 +9,7 @@ import { tmpdir } from 'os'
 import { join, resolve } from 'path'
 import { access, readFile, unlink } from 'fs/promises'
 import { normalizeForHuTaoVoice } from './text-normalizer.js'
+import { translateVoiceTextToJapanese } from './voice-translator.js'
 
 /** Resolve bot-owned Hu Tao voice script. */
 async function resolveHutaoScript(): Promise<string | null> {
@@ -78,7 +79,17 @@ export class AudioManager {
     }
 
     const tempOutPath = join(tmpdir(), `hutao_out_${Date.now()}.ogg`)
-    const speechText = normalizeForHuTaoVoice(text)
+    let speechText: string
+    if (config.HUTAO_VOICE_LANGUAGE === 'ja') {
+      const translatedText = await translateVoiceTextToJapanese(text)
+      if (!translatedText) {
+        logger.warn('Japanese voice translation unavailable; skipping VN generation')
+        return null
+      }
+      speechText = translatedText
+    } else {
+      speechText = normalizeForHuTaoVoice(text)
+    }
 
     try {
       // Script bash VPS menerima --text (teks langsung) + --output.

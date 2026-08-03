@@ -76,6 +76,7 @@ export const config = {
   // === Hu Tao TTS (Edge-TTS + RVC bash script) ===
   // Path ke script bash hutao-voice-note. Default: scripts/hutao-voice-note.
   HUTAO_VOICE_SCRIPT: process.env.HUTAO_VOICE_SCRIPT || '',
+  HUTAO_VOICE_LANGUAGE: process.env.HUTAO_VOICE_LANGUAGE || 'ja',
   HUTAO_AUTO_VOICE_ENABLED: booleanEnv('HUTAO_AUTO_VOICE_ENABLED', true),
   HUTAO_AUTO_VOICE_CHANCE: Math.max(0, Math.min(1, numberEnv('HUTAO_AUTO_VOICE_CHANCE', 0.18))),
   HUTAO_AUTO_VOICE_COOLDOWN_MS: Math.max(0, numberEnv('HUTAO_AUTO_VOICE_COOLDOWN_MS', 10 * 60 * 1000)),
