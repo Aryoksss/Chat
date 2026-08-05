@@ -81,6 +81,14 @@ Parameters:
 - task (string, optional) — Hal yang perlu diingatkan
 - when (string, optional) — Waktu natural atau ISO
 
+## finance
+Description: KHUSUS OWNER DM. Mencatat dan mengelola ledger keuangan pribadi. Gunakan untuk pertanyaan seperti "bulan ini habis berapa", pencatatan manual, melihat transaksi, mengedit transaksi, export CSV, atau sync Gmail. Foto struk dengan command `.catat` diproses langsung oleh bot.
+Parameters:
+- action (string, required) — `record`, `summary`, `list`, `pending`, `update`, `export`, atau `sync`
+- request (string, optional) — teks transaksi/perubahan, atau tanggal `YYYY-MM-DD` untuk sync
+- period (string, optional) — periode `YYYY-MM`
+- transactionId (string, optional) — ID transaksi untuk update
+
 ## anime
 Description: Cari info anime dari MyAnimeList.
 Parameters:

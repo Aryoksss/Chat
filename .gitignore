@@ -5,6 +5,7 @@ data/sessions-backup*/
 data/downloads/*
 data/temp/*
 data/cookies/*
+data/secrets/
 data/pap/
 data/stickers/pool/*.webp
 data/stickers/pool/*.png

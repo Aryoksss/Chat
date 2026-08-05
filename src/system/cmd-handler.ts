@@ -13,7 +13,7 @@ import type { WhatsAppClient } from '../core/client.js'
 import { findKnownGroups, getGroupAccess, setGroupAccess } from './group-access.js'
 import { deleteStickerFromPool, listStickerMetadata, retagSticker } from '../stickers/archive.js'
 
-type MenuCategory = 'ai' | 'media' | 'utility' | 'group' | 'owner'
+type MenuCategory = 'ai' | 'media' | 'utility' | 'finance' | 'group' | 'owner'
 
 export class CommandHandler {
   /** Handle system command — returns true if command was recognized */
@@ -36,6 +36,8 @@ export class CommandHandler {
         return this.cmdMenuCategory(msg, client, 'media')
       case 'menu-utility':
         return this.cmdMenuCategory(msg, client, 'utility')
+      case 'menu-finance':
+        return this.cmdMenuCategory(msg, client, 'finance')
       case 'menu-group':
         return this.cmdMenuCategory(msg, client, 'group')
       case 'menu-owner':
@@ -120,12 +122,17 @@ export class CommandHandler {
       await client.sendText(msg.jid, 'Menu Owner hanya tersedia di chat pribadi owner.', msg.raw)
       return true
     }
+    if (category === 'finance' && msg.isGroup) {
+      await client.sendText(msg.jid, 'Menu Keuangan hanya tersedia di chat pribadi owner.', msg.raw)
+      return true
+    }
 
     const prefix = config.PREFIX
     const configByCategory: Record<MenuCategory, { section: string; title: string }> = {
       ai: { section: 'AI & Search', title: '🔎 AI & Pencarian' },
       media: { section: 'Media', title: '🎬 Media' },
       utility: { section: 'Utility', title: '🧰 Utility' },
+      finance: { section: 'Finance', title: '💰 Keuangan' },
       group: { section: 'Group', title: '👥 Group' },
       owner: { section: 'Owner', title: '🔐 Owner' },
     }
@@ -182,6 +189,7 @@ export class CommandHandler {
       rows.push({ title: 'Group', description: 'Anggota dan nama panggilan grup', rowId: `${prefix}menu-group` })
     }
     if (includeOwnerCommands) {
+      rows.push({ title: 'Keuangan', description: 'Catat struk, Gmail, laporan, dan CSV', rowId: `${prefix}menu-finance` })
       rows.push({ title: 'Owner', description: 'Status, grup, memory, dan sticker pool', rowId: `${prefix}menu-owner` })
     }
 
@@ -202,6 +210,7 @@ export class CommandHandler {
     ]
     if (includeGroupCommands) lines.push(`• Group — ${prefix}menu-group`)
     if (includeOwnerCommands) lines.push(`• Owner — ${prefix}menu-owner`)
+    if (includeOwnerCommands) lines.splice(lines.length - 1, 0, `• Keuangan — ${prefix}menu-finance`)
     return `📋 *Menu Bot*\n\nPilih kategori:\n${lines.join('\n')}\n\nPanduan: ${prefix}helper`
   }
 
@@ -288,6 +297,16 @@ export class CommandHandler {
       ])
     }
 
+    if (includeOwnerCommands) {
+      sections.set('Finance', [
+        { title: 'Menu Keuangan', description: 'Buka dashboard keuangan', rowId: `${prefix}keuangan` },
+        { title: 'Catat Transaksi', description: 'Tulis transaksi atau reply foto struk', rowId: `${prefix}catat` },
+        { title: 'Laporan Bulanan', description: 'Ringkasan bulan berjalan', rowId: `${prefix}laporan` },
+        { title: 'Transaksi Pending', description: 'Konfirmasi hasil struk dan email', rowId: `${prefix}pending` },
+        { title: 'Export CSV', description: 'Unduh transaksi bulan berjalan', rowId: `${prefix}export` },
+      ])
+    }
+
     const output = Array.from(sections.entries()).map(([title, rows]) => ({ title, rows }))
 
     output.unshift({
@@ -316,7 +335,7 @@ export class CommandHandler {
     }
 
     // Keep a predictable order.
-    const order = ['AI Helper', 'AI & Search', 'Media', 'Utility', 'Group', 'Owner']
+    const order = ['AI Helper', 'AI & Search', 'Media', 'Utility', 'Finance', 'Group', 'Owner']
     output.sort((a, b) => {
       const aIndex = order.indexOf(a.title)
       const bIndex = order.indexOf(b.title)

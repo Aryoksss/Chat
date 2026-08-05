@@ -460,7 +460,8 @@ export class WhatsAppClient {
     filePath: string,
     fileType: 'sticker' | 'image' | 'video' | 'document' | 'audio',
     caption?: string,
-    quoted?: any
+    quoted?: any,
+    fileName?: string,
   ): Promise<boolean> {
     try {
       const payload: Record<string, any> = {}
@@ -484,6 +485,8 @@ export class WhatsAppClient {
         await this.sock.sendPresenceUpdate('composing', jid)
         payload.document = { url: filePath }
         if (caption) payload.caption = caption
+        if (fileName) payload.fileName = fileName
+        if (fileName?.toLowerCase().endsWith('.csv')) payload.mimetype = 'text/csv'
       }
 
       const result = await this.sock.sendMessage(jid, payload as any, quoted ? { quoted } : undefined)

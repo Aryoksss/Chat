@@ -6,7 +6,7 @@ Bot WhatsApp berbasis TypeScript dengan persona owner dan grup, API AI OpenAI-co
 
 - Persona owner dan grup berbasis file Markdown.
 - Retry AI, model fallback, tool calling, dan memory per chat.
-- SQLite untuk anggota grup, reply, job media, reminder, dan riwayat sticker.
+- SQLite untuk anggota grup, reply, job media, reminder, riwayat sticker, dan ledger keuangan khusus owner.
 - Sticker pool yang dianalisis berdasarkan konteks dan tidak repetitif.
 - VN Hu Tao dengan Edge-TTS dan RVC, termasuk balasan otomatis opsional.
 - Menu WhatsApp interaktif dengan fallback command teks.
@@ -134,6 +134,22 @@ Sticker yang dikirim owner maupun grup otomatis diarsipkan, dianalisis, dan dima
 | `.stickers` | Melihat sticker dan tag-nya |
 | `.retag <nomor> tag \| deskripsi` | Memperbarui konteks sticker |
 | `.hapus-sticker <nomor>` | Menghapus sticker dari pool |
+| `.catat <transaksi>` | Mencatat manual, atau dipakai sebagai caption/reply foto untuk scan struk |
+| `.keuangan` | Membuka menu keuangan pribadi |
+| `.laporan [YYYY-MM]` / `.transaksi [YYYY-MM]` | Melihat laporan atau transaksi bulanan |
+| `.pending` / `.export [YYYY-MM]` | Memeriksa transaksi pending atau export CSV |
+
+## Keuangan owner dan Gmail
+
+Scan struk dan ledger lokal tersedia hanya di DM owner. Polling Gmail dan laporan bulanan otomatis diaktifkan terpisah:
+
+1. Aktifkan Gmail API pada project Google Cloud pribadi dan buat OAuth client jenis **Desktop app**.
+2. Simpan file client sebagai `data/secrets/gmail-oauth-client.json`.
+3. Buat label Gmail `FinanceBot` beserta filter yang hanya memberi label pada email transaksi BCA/blu asli.
+4. Jalankan `npm run finance:gmail-auth`, buka URL yang tampil, lalu selesaikan login Google.
+5. Isi `FINANCE_ENABLED=true` dan alamat pengirim notifikasi persis pada `FINANCE_GMAIL_ALLOWED_SENDERS`.
+
+Auto-confirm email mati secara default. Pertahankan `FINANCE_EMAIL_AUTO_CONFIRM=false` sampai parser BCA/blu diverifikasi memakai contoh email yang sudah disensor. File OAuth di-ignore Git dan harus disalin terpisah ketika deploy ke VPS.
 
 ## Cookie
 

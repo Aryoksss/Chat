@@ -39,6 +39,7 @@ export interface ToolResult {
   fileType?: 'sticker' | 'document' | 'video' | 'audio' | 'image'
   isAnimated?: boolean    // Required by WhatsApp for animated WebP stickers
   caption?: string        // Caption for the file
+  preserveTextResponse?: boolean // Keep text response after sending a file (e.g. finance report)
   error?: string
 }
 

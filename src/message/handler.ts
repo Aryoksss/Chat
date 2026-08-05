@@ -24,6 +24,7 @@ import type { WhatsAppClient } from '../core/client.js'
 import { botDatabase } from '../storage/database.js'
 import { mediaJobManager } from '../jobs/media-jobs.js'
 import { formatReminderTime } from '../reminders/parser.js'
+import { financeCommandHandler } from '../finance/commands.js'
 
 // ---- Rate Limiter Config ----
 const RATE_LIMIT_WINDOW_MS = 10_000       // 10 detik
@@ -413,6 +414,10 @@ export class MessageHandler {
     logger.info({ persona: personaType, text: msg.text?.slice(0, 60) }, `${logPrefix} processing`)
 
     const albumMessages = await this.collectImageAlbum(msg)
+
+    // Finance commands are intercepted before generic tools/AI so access
+    // control cannot be bypassed from an allowed group or another persona.
+    if (await financeCommandHandler.handle(msg, client)) return
 
     // Quick local menu command before routing to AI/persona flow
     const localCommandParts = getCommandParts(commandText)
@@ -910,7 +915,7 @@ export class MessageHandler {
     // Explicit vision Q&A — NOT an edit request.
     const visionQuestion = /\b(apa|siapa|kenapa|gimana|bagaimana|deskripsi|promptnya|prompt apa|baca|scan|analisis|analisa|cek|lihat|jelaskan)\b/
     // Clear edit/generate verbs.
-    const editVerb = /\b(edit|ubah|ganti|jadikan|jadiin|buat|bikin|generate)\b/
+    const editVerb = /\b(?:edit(?:kan)?|ubah(?:kan|in)?|ganti(?:kan)?|jadikan|jadiin|buat(?:kan)?|bikin(?:in)?|generate|hapus(?:kan)?|hilangkan|buang(?:kan)?)\b/
     // "…jadi <target>" pattern, e.g. "buat yang dikalungkan jadi emas", "ubah jadi kartun".
     const jadiTarget = /\bjadi\s+[a-z0-9\s]{1,20}$/
 

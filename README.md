@@ -6,7 +6,7 @@ A TypeScript WhatsApp bot with separate owner and group personas, an OpenAI-comp
 
 - Separate, Markdown-based owner and group personas.
 - AI retries, fallback models, tool calling, and per-chat memory.
-- SQLite storage for group members, replies, media jobs, reminders, and sticker usage.
+- SQLite storage for group members, replies, media jobs, reminders, sticker usage, and an owner-only finance ledger.
 - Context-aware sticker pool with semantic analysis and recent-use rotation.
 - Hu Tao voice notes using Edge-TTS and RVC, including optional automatic replies.
 - Interactive WhatsApp menus with text-command fallback.
@@ -134,6 +134,22 @@ Incoming stickers from the owner and groups are archived, analyzed, and added to
 | `.stickers` | List stickers and their tags |
 | `.retag <number> tags \| description` | Update sticker context |
 | `.hapus-sticker <number>` | Remove a sticker from the pool |
+| `.catat <transaction>` | Record a manual transaction, or use it as an image caption/reply to scan a receipt |
+| `.keuangan` | Open the private finance menu |
+| `.laporan [YYYY-MM]` / `.transaksi [YYYY-MM]` | Show a monthly report or transaction list |
+| `.pending` / `.export [YYYY-MM]` | Review pending imports or export confirmed transactions as CSV |
+
+## Owner finance and Gmail
+
+Receipt scanning and the local ledger work through the owner DM. Gmail polling and automatic monthly reports are enabled separately:
+
+1. Enable the Gmail API in a private Google Cloud project and create a **Desktop app** OAuth client.
+2. Save the downloaded client file as `data/secrets/gmail-oauth-client.json`.
+3. Create a Gmail label named `FinanceBot` and filters that apply it only to genuine BCA/blu transaction emails.
+4. Run `npm run finance:gmail-auth`, open the displayed URL, and finish Google authorization.
+5. Set `FINANCE_ENABLED=true` and put the exact notification sender addresses in `FINANCE_GMAIL_ALLOWED_SENDERS`.
+
+Email auto-confirmation is off by default. Keep `FINANCE_EMAIL_AUTO_CONFIRM=false` until the BCA/blu parser has been verified with redacted samples. OAuth files are ignored by Git and must be copied separately when deploying to a VPS.
 
 ## Cookies
 

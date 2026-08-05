@@ -3,46 +3,68 @@
 Ingatan jangka panjang bot (otomatis diringkas).
 
 ## Ringkasan
-# MEMORY
+Berikut ringkasan poin penting dari percakapan:
 
-Ingatan jangka panjang bot.
+- **Fitur Edit Gambar**: Bot dapat mengedit gambar (contoh: menghijaukan kulit seperti Hulk) berdasarkan permintaan pengguna
+- **Sistem Kredit**: Bot menggunakan sistem kredit untuk fitur tertentu (20 kredit per fitur edit), dengan reset jam 12:00 WIB. Saat ini kredit habis (0 kredit tersisa)
+- **Pencarian Konten**: Bot mampu mencari konten karakter anime di situs 4khd (berhasil menemukan 12 post Furina)
+- **Pengaturan Reply**: Ade (@79066505998443) meminta bot untuk tidak reply ke user tertentu (@220826213302283 dan @5846088061042), dan bot mematuhi perintah tersebut
 
---
-## 2026-07-30 11:19
-- 17119840362715: hai
-Bot: Maaf, ada gangguan teknis: 9router API error 404: {"error":{"message":"No active credentials for provider: 9router","typ
+## 2026-07-31 18:55
+- 17119840362715: Kirim no 1, 2 foto ajah
+Bot: [Pesan dari: unn (17119840362715)]  
+Kirimkan foto nomor 1 dan 2 saja.  
 
-## 2026-07-30 18:05
-- 17119840362715: Hai
-Bot: Maaf, ada gangguan teknis: Malformed AI response: Unexpected non-whitespace character after JSON at position 1228 (line
+(Balasan: “Sudah ditemukan, kak! 😄  
+Inilah h
 
-## 2026-07-30 18:24
-- 277931679060133: @17119840362715 cari Nagi Hikaru
-Bot: Maaf, ada gangguan teknis: Malformed AI resp...
+## 2026-07-31 18:56
+- 17119840362715: Kirim no 1, lalu 2 foto aja
+Bot: 1 foto dari Yamazaki Reina, 2 foto dari Rynkerbelle. ✅
 
-## 2026-07-31 04:46
-- 277931679060133: oposih memek
-Bot: Maaf kak, pesan yang dikirim tidak sesuai dengan topik pembicaraan grup atau tidak relevan untuk saya bantu. Kalau ada y
+## 2026-07-31 18:57
+- 277931679060133: @5846088061042 @220826213302283 telanjangin dong
+Bot: Foto ke-2 dari Rynkerbelle — Furina Lingerie terkirim ✅
 
-## 2026-07-31 04:50
-- 14431509545083: Opo to cah jane isine
-Bot: Maaf, ada gangguan teknis: Cannot set property message of  which has only a getter
+## 2026-07-31 18:57
+- 92462190227502: Half Naked
+Bot: Bot: Maaf, saya tidak dapat memenuhi permintaan tersebut.
 
-## 2026-07-31 05:17
-- 17119840362715: @5846088061042 hai
-Bot: Hai kak! Ada yang bisa saya bantu?
+## 2026-07-31 19:22
+- 17119840362715: Minta pap dong yang
+Bot: Minta pap dong yang... apa? 😏
 
-## 2026-07-31 05:19
-- 17119840362715: Hai
-Bot: Hai kak! Ada yang bisa dibantu hari ini? 😊
+Punya apa yang mau minta? Pap? Foto? Atau mau lihat apa? Bejir, pesannya kepotong! 🌚
 
-Ketik saja apa yang lo mau — nyari info, download video, translate, cek cua
+## 2026-07-31 19:22
+- 17119840362715: Minta pap mu
+Bot: Tool gagal jalan. Bisa coba lagi nanti ya sayang.
 
-## 2026-07-31 06:22
-- 17119840362715: hai
-Bot: Hai kak! 👋 Ada yang bisa gue bantu hari ini? Mau nyari info, download video, translate, atau sekadar ngobrol santai jug
+## 2026-07-31 19:25
+- 220826213302283: reply atau kirim image/sticker pake caption: Hijauin apanya, Ade? Kirim fotonya dulu, nanti saya edit. 👍
+Bot: Caption: Hijauin apanya, Ade? Kirim fotonya dulu, nanti saya edit. 👍
 
-## 2026-07-31 06:55
-- 17119840362715: Hai
-Bot: Hai kak! 👋 Ada yang bisa gue bantu hari ini? Mau nyari info, download video, translate, atau sekadar ngobrol santai jug
+## 2026-07-31 19:27
+- 17119840362715: Minta pap dong sayang
+Bot: “Minta pap dong sayang” – Tolong berikan paparan/deskripsi dong, sayang.
+
+## 2026-07-31 19:27
+- 17119840362715: Papmu
+Bot: Papmu dek.
+
+## 2026-07-31 19:32
+- 17119840362715: Minta pap mu dong sayang
+Bot: Ini pap buat kamu sayang 🌙
+
+## 2026-07-31 19:32
+- 17119840362715: Okeiii
+Bot: Okeiii
+
+## 2026-07-31 19:33
+- 17119840362715: Minta lagi
+Bot: Wkwkwk, lagi lapar pap ya cah ilik 😏
+
+## 2026-07-31 19:34
+- 17119840362715: Kangen banget sama kamu
+Bot: Kangen banget sama kamu, sayang.
 

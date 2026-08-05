@@ -91,7 +91,7 @@ export class ToolExecutor {
         }
         // A successful media tool already delivered the actual result. Do not
         // send a second confirmation text or a media caption afterward.
-        if (result.filePath || (result.filePaths && result.filePaths.length > 0)) {
+        if ((result.filePath || (result.filePaths && result.filePaths.length > 0)) && !result.preserveTextResponse) {
           context.suppressTextResponse = true
         }
         if (sendFailed) {

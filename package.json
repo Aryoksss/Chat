@@ -7,7 +7,8 @@
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "finance:gmail-auth": "tsx scripts/gmail-auth.ts"
   },
   "keywords": [],
   "author": "",

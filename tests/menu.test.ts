@@ -25,6 +25,7 @@ test('private main menu shows owner category but not group category', () => {
   const rows = sections.flatMap((section: any) => section.rows)
 
   assert.ok(rows.some((row: any) => row.rowId === '.menu-owner'))
+  assert.ok(rows.some((row: any) => row.rowId === '.menu-finance'))
   assert.equal(rows.some((row: any) => row.rowId === '.menu-group'), false)
 })
 
@@ -61,6 +62,7 @@ test('group menu excludes owner commands and private pap tool', () => {
   assert.equal(sections.some((section: any) => section.title === 'Owner'), false)
   assert.equal(rows.some((row: any) => row.rowId.startsWith('!')), true)
   assert.equal(rows.some((row: any) => row.rowId.includes('pap')), false)
+  assert.equal(rows.some((row: any) => row.rowId.includes('keuangan')), false)
   assert.ok(rows.some((row: any) => row.rowId === '!jobs'))
   assert.ok(rows.some((row: any) => row.rowId === '!reminders'))
   assert.ok(rows.some((row: any) => row.rowId === '!anggota'))

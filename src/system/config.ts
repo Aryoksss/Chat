@@ -29,6 +29,13 @@ function idListEnv(name: string): string[] {
     .filter(Boolean)
 }
 
+function stringListEnv(name: string): string[] {
+  return (process.env[name] || '')
+    .split(',')
+    .map(value => value.trim().toLowerCase())
+    .filter(Boolean)
+}
+
 export const config = {
   // === 9router AI ===
   NINE_ROUTER_API_KEY: process.env.NINE_ROUTER_API_KEY || '',
@@ -81,6 +88,26 @@ export const config = {
   HUTAO_AUTO_VOICE_CHANCE: Math.max(0, Math.min(1, numberEnv('HUTAO_AUTO_VOICE_CHANCE', 0.18))),
   HUTAO_AUTO_VOICE_COOLDOWN_MS: Math.max(0, numberEnv('HUTAO_AUTO_VOICE_COOLDOWN_MS', 10 * 60 * 1000)),
   HUTAO_AUTO_VOICE_MAX_CHARS: Math.max(40, numberEnv('HUTAO_AUTO_VOICE_MAX_CHARS', 240)),
+
+  // === Owner finance ledger + Gmail transaction import ===
+  FINANCE_ENABLED: booleanEnv('FINANCE_ENABLED', false),
+  FINANCE_GMAIL_CLIENT_FILE: path.resolve(ROOT, process.env.FINANCE_GMAIL_CLIENT_FILE || 'data/secrets/gmail-oauth-client.json'),
+  FINANCE_GMAIL_TOKEN_FILE: path.resolve(ROOT, process.env.FINANCE_GMAIL_TOKEN_FILE || 'data/secrets/gmail-token.json'),
+  FINANCE_GMAIL_LABEL: process.env.FINANCE_GMAIL_LABEL || 'FinanceBot',
+  FINANCE_GMAIL_ALLOWED_SENDERS: stringListEnv('FINANCE_GMAIL_ALLOWED_SENDERS'),
+  FINANCE_EMAIL_POLL_MS: Math.max(30_000, numberEnv('FINANCE_EMAIL_POLL_MS', 120_000)),
+  FINANCE_EMAIL_AUTO_CONFIRM: booleanEnv('FINANCE_EMAIL_AUTO_CONFIRM', false),
+  // Manual/historical Gmail syncs are trusted after label + sender filtering;
+  // background polling stays pending unless FINANCE_EMAIL_AUTO_CONFIRM=true.
+  FINANCE_EMAIL_SYNC_AUTO_CONFIRM: booleanEnv('FINANCE_EMAIL_SYNC_AUTO_CONFIRM', true),
+  FINANCE_EMAIL_START_DATE: process.env.FINANCE_EMAIL_START_DATE || '',
+  FINANCE_REPORT_TIME: /^([01]\d|2[0-3]):[0-5]\d$/.test(process.env.FINANCE_REPORT_TIME || '')
+    ? process.env.FINANCE_REPORT_TIME!
+    : '08:00',
+  FINANCE_SHEETS_ENABLED: booleanEnv('FINANCE_SHEETS_ENABLED', false),
+  FINANCE_GOOGLE_SPREADSHEET_ID: process.env.FINANCE_GOOGLE_SPREADSHEET_ID || '',
+  FINANCE_GOOGLE_SHEET_NAME: process.env.FINANCE_GOOGLE_SHEET_NAME || 'Transactions',
+  FINANCE_SHEETS_SYNC_MS: Math.max(60_000, numberEnv('FINANCE_SHEETS_SYNC_MS', 120_000)),
 
   PREFIX: process.env.PREFIX || '.',                   // Command prefix
   // Accept the configured prefix plus common WhatsApp-style alternatives.

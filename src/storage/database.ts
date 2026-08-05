@@ -3,6 +3,15 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { config } from '../system/config.js'
+import type {
+  FinanceImportRecord,
+  FinanceImportSource,
+  FinanceImportStatus,
+  FinanceTransactionDraft,
+  FinanceTransactionPatch,
+  FinanceTransactionRecord,
+  FinanceTransactionStatus,
+} from '../finance/types.js'
 
 export type MediaJobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 
@@ -117,6 +126,55 @@ export class BotDatabase {
         PRIMARY KEY (jid, tool)
       );
       CREATE INDEX IF NOT EXISTS idx_tool_contexts_updated ON tool_contexts(updated_at);
+
+      CREATE TABLE IF NOT EXISTS finance_transactions (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        amount INTEGER NOT NULL DEFAULT 0,
+        currency TEXT NOT NULL DEFAULT 'IDR',
+        occurred_at INTEGER NOT NULL,
+        merchant TEXT NOT NULL DEFAULT '',
+        category TEXT NOT NULL DEFAULT 'Lainnya',
+        account TEXT NOT NULL DEFAULT '',
+        counterparty_account TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        confidence REAL NOT NULL DEFAULT 0,
+        duplicate_of TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (duplicate_of) REFERENCES finance_transactions(id) ON DELETE SET NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_finance_period ON finance_transactions(occurred_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_finance_status ON finance_transactions(status, occurred_at DESC);
+
+      CREATE TABLE IF NOT EXISTS finance_imports (
+        source TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        content_hash TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'processing',
+        transaction_id TEXT,
+        error_code TEXT NOT NULL DEFAULT '',
+        received_at INTEGER NOT NULL,
+        processed_at INTEGER,
+        PRIMARY KEY (source, external_id),
+        FOREIGN KEY (transaction_id) REFERENCES finance_transactions(id) ON DELETE SET NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_finance_import_transaction ON finance_imports(transaction_id);
+
+      CREATE TABLE IF NOT EXISTS finance_sync_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS finance_report_runs (
+        period TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'processing',
+        created_at INTEGER NOT NULL,
+        delivered_at INTEGER
+      );
     `)
     const memberColumns = this.db.prepare('PRAGMA table_info(group_members)').all()
       .map(row => rowValue<string>(row, 'name'))
@@ -127,6 +185,8 @@ export class BotDatabase {
     this.db.prepare('DELETE FROM outgoing_messages WHERE created_at < ?').run(cutoff)
     this.db.prepare(`UPDATE media_jobs SET status='failed', error='Bot restart sebelum job selesai', updated_at=? WHERE status IN ('queued','running')`).run(Date.now())
     this.db.prepare(`UPDATE reminders SET status='active' WHERE status='processing'`).run()
+    this.db.prepare(`UPDATE finance_report_runs SET status='failed' WHERE status='processing'`).run()
+    this.db.prepare(`UPDATE finance_imports SET status='failed', error_code='interrupted' WHERE status='processing'`).run()
     this.db.prepare('DELETE FROM tool_contexts WHERE updated_at < ?').run(Date.now() - 24 * 60 * 60 * 1000)
   }
 
@@ -317,12 +377,243 @@ export class BotDatabase {
     else this.db.prepare('DELETE FROM tool_contexts WHERE tool=?').run(tool)
   }
 
+  createFinanceTransaction(
+    draft: FinanceTransactionDraft,
+    status: FinanceTransactionStatus,
+    duplicateOf?: string,
+  ): FinanceTransactionRecord {
+    const id = randomUUID().replace(/-/g, '').slice(0, 12)
+    const now = Date.now()
+    this.db.prepare(`
+      INSERT INTO finance_transactions(
+        id,type,amount,currency,occurred_at,merchant,category,account,counterparty_account,
+        note,source,status,confidence,duplicate_of,created_at,updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      id, draft.type, Math.max(0, Math.round(draft.amount)), draft.currency, draft.occurredAt,
+      draft.merchant, draft.category, draft.account, draft.counterpartyAccount, draft.note,
+      draft.source, status, draft.confidence, duplicateOf || null, now, now,
+    )
+    return this.getFinanceTransaction(id)!
+  }
+
+  getFinanceTransaction(idOrPrefix: string): FinanceTransactionRecord | undefined {
+    if (!idOrPrefix) return undefined
+    const exact = this.db.prepare('SELECT * FROM finance_transactions WHERE id=?').get(idOrPrefix)
+    if (exact) return this.mapFinanceTransaction(exact)
+    const matches = this.db.prepare('SELECT * FROM finance_transactions WHERE id LIKE ? ORDER BY created_at DESC LIMIT 2')
+      .all(`${idOrPrefix}%`)
+    return matches.length === 1 ? this.mapFinanceTransaction(matches[0]) : undefined
+  }
+
+  listFinanceTransactions(
+    startAt: number,
+    endAt: number,
+    statuses: FinanceTransactionStatus[] = ['confirmed'],
+    limit = 500,
+  ): FinanceTransactionRecord[] {
+    if (statuses.length === 0) return []
+    const placeholders = statuses.map(() => '?').join(',')
+    return this.db.prepare(`
+      SELECT * FROM finance_transactions
+      WHERE occurred_at>=? AND occurred_at<? AND status IN (${placeholders})
+      ORDER BY occurred_at DESC LIMIT ?
+    `).all(startAt, endAt, ...statuses, limit).map(row => this.mapFinanceTransaction(row))
+  }
+
+  listPendingFinanceTransactions(limit = 30): FinanceTransactionRecord[] {
+    return this.db.prepare(`
+      SELECT * FROM finance_transactions
+      WHERE status IN ('pending','pending_duplicate')
+      ORDER BY created_at DESC LIMIT ?
+    `).all(limit).map(row => this.mapFinanceTransaction(row))
+  }
+
+  updateFinanceTransaction(idOrPrefix: string, patch: FinanceTransactionPatch): FinanceTransactionRecord | undefined {
+    const current = this.getFinanceTransaction(idOrPrefix)
+    if (!current) return undefined
+    const next = {
+      type: patch.type ?? current.type,
+      amount: patch.amount ?? current.amount,
+      currency: patch.currency ?? current.currency,
+      occurredAt: patch.occurredAt ?? current.occurredAt,
+      merchant: patch.merchant ?? current.merchant,
+      category: patch.category ?? current.category,
+      account: patch.account ?? current.account,
+      counterpartyAccount: patch.counterpartyAccount ?? current.counterpartyAccount,
+      note: patch.note ?? current.note,
+      status: patch.status ?? current.status,
+      confidence: patch.confidence ?? current.confidence,
+      duplicateOf: patch.duplicateOf === null ? undefined : (patch.duplicateOf ?? current.duplicateOf),
+    }
+    this.db.prepare(`
+      UPDATE finance_transactions SET
+        type=?,amount=?,currency=?,occurred_at=?,merchant=?,category=?,account=?,counterparty_account=?,
+        note=?,status=?,confidence=?,duplicate_of=?,updated_at=? WHERE id=?
+    `).run(
+      next.type, Math.max(0, Math.round(next.amount)), next.currency, next.occurredAt,
+      next.merchant, next.category, next.account, next.counterpartyAccount, next.note,
+      next.status, next.confidence, next.duplicateOf || null, Date.now(), current.id,
+    )
+    return this.getFinanceTransaction(current.id)
+  }
+
+  findFinanceCandidates(
+    amount: number,
+    currency: string,
+    occurredAt: number,
+    windowMs: number,
+    excludeId?: string,
+  ): FinanceTransactionRecord[] {
+    return this.db.prepare(`
+      SELECT * FROM finance_transactions
+      WHERE amount=? AND currency=? AND occurred_at BETWEEN ? AND ?
+        AND status IN ('confirmed','pending','pending_duplicate')
+        AND (?='' OR id<>?)
+      ORDER BY ABS(occurred_at-?) LIMIT 20
+    `).all(
+      Math.round(amount), currency, occurredAt - windowMs, occurredAt + windowMs,
+      excludeId || '', excludeId || '', occurredAt,
+    ).map(row => this.mapFinanceTransaction(row))
+  }
+
+  mergeFinanceTransaction(sourceId: string, targetId: string): boolean {
+    const source = this.getFinanceTransaction(sourceId)
+    const target = this.getFinanceTransaction(targetId)
+    if (!source || !target || source.id === target.id) return false
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db.prepare('UPDATE finance_imports SET transaction_id=? WHERE transaction_id=?').run(target.id, source.id)
+      this.db.prepare(`UPDATE finance_transactions SET status='ignored', duplicate_of=?, updated_at=? WHERE id=?`)
+        .run(target.id, Date.now(), source.id)
+      this.db.exec('COMMIT')
+      return true
+    } catch (err) {
+      this.db.exec('ROLLBACK')
+      throw err
+    }
+  }
+
+  getFinanceImport(source: FinanceImportSource, externalId: string): FinanceImportRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM finance_imports WHERE source=? AND external_id=?').get(source, externalId)
+    return row ? this.mapFinanceImport(row) : undefined
+  }
+
+  claimFinanceImport(
+    source: FinanceImportSource,
+    externalId: string,
+    contentHash: string,
+    receivedAt: number,
+    retryFailed = false,
+  ): boolean {
+    const existing = this.getFinanceImport(source, externalId)
+    if (existing) {
+      if (!retryFailed || existing.status !== 'failed') return false
+      const result = this.db.prepare(`
+        UPDATE finance_imports SET status='processing', error_code='', processed_at=NULL
+        WHERE source=? AND external_id=? AND status='failed'
+      `).run(source, externalId)
+      return Number(result.changes) === 1
+    }
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO finance_imports(source,external_id,content_hash,status,received_at)
+      VALUES(?,?,?,'processing',?)
+    `).run(source, externalId, contentHash, receivedAt)
+    return Number(result.changes) === 1
+  }
+
+  completeFinanceImport(
+    source: FinanceImportSource,
+    externalId: string,
+    status: Exclude<FinanceImportStatus, 'processing'>,
+    transactionId?: string,
+    errorCode = '',
+  ): void {
+    this.db.prepare(`
+      UPDATE finance_imports SET status=?, transaction_id=?, error_code=?, processed_at=?
+      WHERE source=? AND external_id=?
+    `).run(status, transactionId || null, errorCode.slice(0, 120), Date.now(), source, externalId)
+  }
+
+  setFinanceImportTransaction(sourceTransactionId: string, targetTransactionId: string): void {
+    this.db.prepare('UPDATE finance_imports SET transaction_id=? WHERE transaction_id=?')
+      .run(targetTransactionId, sourceTransactionId)
+  }
+
+  getFinanceSyncState(key: string): string | undefined {
+    const row = this.db.prepare('SELECT value FROM finance_sync_state WHERE key=?').get(key)
+    return row ? rowValue<string>(row, 'value') : undefined
+  }
+
+  setFinanceSyncState(key: string, value: string): void {
+    this.db.prepare(`
+      INSERT INTO finance_sync_state(key,value,updated_at) VALUES(?,?,?)
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+    `).run(key, value, Date.now())
+  }
+
+  claimFinanceReport(period: string): boolean {
+    const row = this.db.prepare('SELECT status FROM finance_report_runs WHERE period=?').get(period)
+    if (!row) {
+      const result = this.db.prepare(`INSERT INTO finance_report_runs(period,status,created_at) VALUES(?,'processing',?)`)
+        .run(period, Date.now())
+      return Number(result.changes) === 1
+    }
+    if (rowValue<string>(row, 'status') !== 'failed') return false
+    const result = this.db.prepare(`UPDATE finance_report_runs SET status='processing', delivered_at=NULL WHERE period=? AND status='failed'`)
+      .run(period)
+    return Number(result.changes) === 1
+  }
+
+  completeFinanceReport(period: string): void {
+    this.db.prepare(`UPDATE finance_report_runs SET status='delivered', delivered_at=? WHERE period=?`)
+      .run(Date.now(), period)
+  }
+
+  failFinanceReport(period: string): void {
+    this.db.prepare(`UPDATE finance_report_runs SET status='failed' WHERE period=?`).run(period)
+  }
+
   private mapReminder(row: unknown): ReminderRecord {
     return {
       id: rowValue<string>(row, 'id'), jid: rowValue<string>(row, 'jid'), sender: rowValue<string>(row, 'sender'),
       task: rowValue<string>(row, 'task'), dueAt: Number(rowValue<number>(row, 'due_at')),
       recurrence: rowValue<string>(row, 'recurrence') || undefined,
       status: rowValue<ReminderRecord['status']>(row, 'status'), createdAt: Number(rowValue<number>(row, 'created_at')),
+    }
+  }
+
+  private mapFinanceTransaction(row: unknown): FinanceTransactionRecord {
+    return {
+      id: rowValue<string>(row, 'id'),
+      type: rowValue<FinanceTransactionRecord['type']>(row, 'type'),
+      amount: Number(rowValue<number>(row, 'amount')),
+      currency: rowValue<string>(row, 'currency'),
+      occurredAt: Number(rowValue<number>(row, 'occurred_at')),
+      merchant: rowValue<string>(row, 'merchant'),
+      category: rowValue<string>(row, 'category'),
+      account: rowValue<string>(row, 'account'),
+      counterpartyAccount: rowValue<string>(row, 'counterparty_account'),
+      note: rowValue<string>(row, 'note'),
+      source: rowValue<FinanceTransactionRecord['source']>(row, 'source'),
+      status: rowValue<FinanceTransactionStatus>(row, 'status'),
+      confidence: Number(rowValue<number>(row, 'confidence')),
+      duplicateOf: rowValue<string>(row, 'duplicate_of') || undefined,
+      createdAt: Number(rowValue<number>(row, 'created_at')),
+      updatedAt: Number(rowValue<number>(row, 'updated_at')),
+    }
+  }
+
+  private mapFinanceImport(row: unknown): FinanceImportRecord {
+    return {
+      source: rowValue<FinanceImportSource>(row, 'source'),
+      externalId: rowValue<string>(row, 'external_id'),
+      contentHash: rowValue<string>(row, 'content_hash'),
+      status: rowValue<FinanceImportStatus>(row, 'status'),
+      transactionId: rowValue<string>(row, 'transaction_id') || undefined,
+      errorCode: rowValue<string>(row, 'error_code') || undefined,
+      receivedAt: Number(rowValue<number>(row, 'received_at')),
+      processedAt: rowValue<number>(row, 'processed_at') ? Number(rowValue<number>(row, 'processed_at')) : undefined,
     }
   }
 

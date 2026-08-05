@@ -20,6 +20,7 @@ import { handleFourkhdSearch, handleFourkhdLatest, handleFourkhdDetail } from '.
 import { handleAnimeDlSearch, handleAnimeLinks } from './handlers/anime-dl.js'
 import { handlePap } from './handlers/pap.js'
 import { handleReminder } from './handlers/reminder.js'
+import { handleFinance } from './handlers/finance.js'
 
 export function registerAllTools() {
   const tools = [
@@ -38,6 +39,12 @@ export function registerAllTools() {
     { name: 'shortlink', desc: 'Pendekin URL', params: { url: { type: 'string' } }, handler: handleShortlink },
     { name: 'weather', desc: 'Cek cuaca', params: { city: { type: 'string' } }, handler: handleWeather },
     { name: 'reminder', desc: 'Buat pengingat sekali atau berulang. Pesan saat jatuh tempo akan disusun AI secara bervariasi.', params: { request: { type: 'string', description: 'Kalimat lengkap, contoh: ingatkan saya besok jam 8 bayar listrik' }, task: { type: 'string' }, when: { type: 'string' } }, handler: handleReminder },
+    { name: 'finance', desc: 'KHUSUS OWNER DM. Catat, edit, rangkum, daftar, export, sinkronkan Gmail, atau perbarui Google Sheets untuk transaksi keuangan pribadi.', params: {
+      action: { type: 'string', enum: ['record', 'summary', 'list', 'pending', 'update', 'export', 'sync', 'sheets'] },
+      request: { type: 'string', description: 'Teks transaksi/perubahan, atau YYYY-MM-DD untuk sync' },
+      period: { type: 'string', description: 'Periode YYYY-MM atau nama bulan, misalnya Juli 2026, bulan ini, atau bulan lalu' },
+      transactionId: { type: 'string' },
+    }, handler: handleFinance },
     { name: 'anime', desc: 'Cari anime', params: { query: { type: 'string' } }, handler: handleAnimeSearch },
     { name: 'web-search', desc: 'Cari informasi di internet. Pakai UNTUK SEMUA pertanyaan yang butuh fakta, berita, info umum, atau hal yang tidak kamu yakin', params: { query: { type: 'string' }, maxResults: { type: 'number' } }, handler: handleWebSearch },
     { name: 'web-fetch', desc: 'Baca isi halaman web dari sebuah URL (ambil teks/JSON dari link). Gunakan untuk membaca detail dari link yang ditemukan web-search', params: { url: { type: 'string' }, maxChars: { type: 'number' } }, handler: handleWebFetch },
