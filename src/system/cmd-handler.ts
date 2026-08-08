@@ -183,7 +183,7 @@ export class CommandHandler {
     const rows = [
       { title: 'AI & Pencarian', description: 'Web, AI, anime, gambar, dan 4KHD', rowId: `${prefix}menu-ai` },
       { title: 'Media', description: 'Sticker dan downloader media', rowId: `${prefix}menu-media` },
-      { title: 'Utility', description: 'QR, translate, cuaca, reminder, dan job', rowId: `${prefix}menu-utility` },
+      { title: 'Utility', description: includeOwnerCommands ? 'QR, translate, cuaca, reminder, dan job' : 'QR, translate, cuaca, dan job', rowId: `${prefix}menu-utility` },
     ]
     if (includeGroupCommands) {
       rows.push({ title: 'Group', description: 'Anggota dan nama panggilan grup', rowId: `${prefix}menu-group` })
@@ -269,6 +269,7 @@ export class CommandHandler {
     const sections = new Map<string, Array<{ title: string; description?: string; rowId: string }>>()
 
     for (const tool of toolDefinitions) {
+      if (tool.name === 'reminder' && !includeOwnerCommands) continue
       const meta = this.getToolMenuMeta(tool.name, prefix)
       if (!meta) continue
 
@@ -285,9 +286,11 @@ export class CommandHandler {
     const utilityRows = sections.get('Utility') || []
     utilityRows.push(
       { title: 'Job Media', description: 'Lihat proses media yang aktif', rowId: `${prefix}jobs` },
-      { title: 'Pengingat Aktif', description: 'Lihat pengingat chat ini', rowId: `${prefix}reminders` },
       { title: 'Batalkan Job', description: 'Batalkan dengan ID job', rowId: `${prefix}cancel` },
     )
+    if (includeOwnerCommands) {
+      utilityRows.splice(1, 0, { title: 'Pengingat Aktif', description: 'Lihat pengingat owner', rowId: `${prefix}reminders` })
+    }
     sections.set('Utility', utilityRows)
 
     if (includeGroupCommands) {
@@ -373,10 +376,10 @@ export class CommandHandler {
       `${prefix}menu`,
       `${prefix}help`,
       `${prefix}jobs`,
-      `${prefix}reminders`,
       `${prefix}cancel`,
       ...commands,
     ]
+    if (includeOwnerCommands) commonCommands.splice(4, 0, `${prefix}reminders`)
     const groupCommands = includeGroupCommands ? [`${prefix}anggota`, `${prefix}panggil-aku`] : []
     const ownerCommands = includeOwnerCommands
       ? ['/status', '/reload', '/memory', '/clear', '/groups', '/group-allow', '/group-block', '/stickers', '/retag', '/hapus-sticker']

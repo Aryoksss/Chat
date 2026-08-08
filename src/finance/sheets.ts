@@ -24,6 +24,14 @@ const REVIEW_HEADER = [
 type Color = { red: number; green: number; blue: number }
 type CellValue = string | number
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function isTransient(status: number): boolean {
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504
+}
+
 const COLORS = {
   navy: { red: 0.12, green: 0.31, blue: 0.47 } satisfies Color,
   dark: { red: 0.16, green: 0.20, blue: 0.25 } satisfies Color,
@@ -627,16 +635,22 @@ export class FinanceSheetsClient {
 
   private async api<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
     const token = await this.auth.getGoogleAccessToken()
-    const response = await fetch(`${SHEETS_API}${path}`, {
-      ...init,
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(init.headers || {}) },
-      signal: AbortSignal.timeout(30_000),
-    })
-    if (!response.ok) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await fetch(`${SHEETS_API}${path}`, {
+        ...init,
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(init.headers || {}) },
+        signal: AbortSignal.timeout(30_000),
+      })
+      if (response.ok) {
+        if (response.status === 204) return undefined as T
+        return response.json() as Promise<T>
+      }
       const detail = (await response.text()).slice(0, 300)
-      throw new Error(`Google Sheets API ${response.status}: ${detail}`)
+      if (!isTransient(response.status) || attempt === 2) {
+        throw new Error(`Google Sheets API ${response.status}: ${detail}`)
+      }
+      await sleep(500 * (attempt + 1))
     }
-    if (response.status === 204) return undefined as T
-    return response.json() as Promise<T>
+    throw new Error('Google Sheets API gagal setelah retry')
   }
 }

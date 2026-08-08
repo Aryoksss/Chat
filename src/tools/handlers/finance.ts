@@ -56,6 +56,13 @@ export async function handleFinance(args: FinanceToolArgs, context: ToolContext)
         : 'Tidak ada transaksi pending.',
     }
   }
+  if (action === 'confirm' || action === 'konfirmasi') {
+    if (!args.transactionId) return { success: false, error: 'ID transaksi wajib diisi.' }
+    const result = financeService.confirm(args.transactionId)
+    return result.transaction
+      ? { success: true, text: `✅ Tersimpan.\n\n${formatFinanceTransaction(result.transaction)}` }
+      : { success: false, error: result.error }
+  }
   if (action === 'record') {
     if (!args.request?.trim()) return { success: false, error: 'Isi transaksi belum diberikan.' }
     const result = await financeService.recordManual(args.request)

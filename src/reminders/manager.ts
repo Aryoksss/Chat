@@ -1,9 +1,19 @@
 import { aiBridge } from '../core/ai.js'
 import type { WhatsAppClient } from '../core/client.js'
 import { botDatabase, type ReminderRecord } from '../storage/database.js'
+import { config } from '../system/config.js'
 import { logger } from '../system/logger.js'
 
 const POLL_MS = 10_000
+
+function isOwnerReminder(reminder: ReminderRecord): boolean {
+  if (reminder.jid.endsWith('@g.us')) return false
+  const jid = reminder.jid.replace(/[^0-9]/g, '')
+  return [config.OWNER_NUMBER, config.OWNER_LID]
+    .filter(Boolean)
+    .map(value => value.replace(/[^0-9]/g, ''))
+    .includes(jid)
+}
 
 function nextOccurrence(reminder: ReminderRecord): number | undefined {
   if (!reminder.recurrence) return undefined
@@ -38,6 +48,11 @@ export class ReminderManager {
     try {
       for (const reminder of botDatabase.dueReminders()) {
         if (!botDatabase.claimReminder(reminder.id)) continue
+        if (!isOwnerReminder(reminder)) {
+          botDatabase.completeReminder(reminder.id)
+          logger.warn({ reminderId: reminder.id, jid: reminder.jid }, 'Non-owner reminder discarded')
+          continue
+        }
         try {
           const aiText = await aiBridge.composeReminderMessage(reminder.task, reminder.jid.endsWith('@g.us'))
           const senderDigits = reminder.sender.replace(/[^0-9]/g, '')

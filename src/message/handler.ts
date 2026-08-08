@@ -69,6 +69,15 @@ function hasCommandPrefix(text: string): boolean {
   return config.PREFIXES.some(prefix => normalized.startsWith(prefix))
 }
 
+function isOwnerDm(msg: IncomingMessage): boolean {
+  if (msg.isGroup) return false
+  const sender = msg.sender.replace(/[^0-9]/g, '')
+  return [config.OWNER_NUMBER, config.OWNER_LID]
+    .filter(Boolean)
+    .map(value => value.replace(/[^0-9]/g, ''))
+    .includes(sender)
+}
+
 function getCommandParts(text: string): { prefix: string; rest: string } | null {
   const normalized = (text || '').trim()
   const prefix = config.PREFIXES.find(candidate => normalized.startsWith(candidate))
@@ -996,6 +1005,11 @@ export class MessageHandler {
     if (!parts) return false
     const [command, id] = parts.rest.split(/\s+/)
     const normalized = command?.toLowerCase()
+    const isReminderCommand = ['reminders', 'pengingat', 'cancel-reminder', 'hapus-pengingat'].includes(normalized || '')
+    if (isReminderCommand && !isOwnerDm(msg)) {
+      await client.sendText(msg.jid, '🔒 Fitur alarm/reminder hanya tersedia di chat pribadi owner.', msg.raw)
+      return true
+    }
     if (normalized === 'reminders' || normalized === 'pengingat') {
       const reminders = botDatabase.listReminders(msg.jid)
       if (reminders.length === 0) {

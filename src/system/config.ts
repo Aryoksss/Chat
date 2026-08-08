@@ -109,6 +109,9 @@ export const config = {
   FINANCE_GOOGLE_SHEET_NAME: process.env.FINANCE_GOOGLE_SHEET_NAME || 'Transactions',
   FINANCE_SHEETS_SYNC_MS: Math.max(60_000, numberEnv('FINANCE_SHEETS_SYNC_MS', 120_000)),
 
+  // === Automatic owner greetings (WIB, owner DM only) ===
+  OWNER_GREETING_ENABLED: booleanEnv('OWNER_GREETING_ENABLED', true),
+
   PREFIX: process.env.PREFIX || '.',                   // Command prefix
   // Accept the configured prefix plus common WhatsApp-style alternatives.
   PREFIXES: Array.from(new Set([process.env.PREFIX || '.', '.', '/', '!'])),

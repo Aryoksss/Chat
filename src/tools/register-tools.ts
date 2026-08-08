@@ -38,9 +38,9 @@ export function registerAllTools() {
     { name: 'translate', desc: 'Translate teks', params: { text: { type: 'string' }, to: { type: 'string' } }, handler: handleTranslate },
     { name: 'shortlink', desc: 'Pendekin URL', params: { url: { type: 'string' } }, handler: handleShortlink },
     { name: 'weather', desc: 'Cek cuaca', params: { city: { type: 'string' } }, handler: handleWeather },
-    { name: 'reminder', desc: 'Buat pengingat sekali atau berulang. Pesan saat jatuh tempo akan disusun AI secara bervariasi.', params: { request: { type: 'string', description: 'Kalimat lengkap, contoh: ingatkan saya besok jam 8 bayar listrik' }, task: { type: 'string' }, when: { type: 'string' } }, handler: handleReminder },
-    { name: 'finance', desc: 'KHUSUS OWNER DM. Catat, edit, rangkum, daftar, export, sinkronkan Gmail, atau perbarui Google Sheets untuk transaksi keuangan pribadi.', params: {
-      action: { type: 'string', enum: ['record', 'summary', 'list', 'pending', 'update', 'export', 'sync', 'sheets'] },
+    { name: 'reminder', desc: 'KHUSUS OWNER DM. Buat alarm/pengingat sekali atau berulang. Pesan saat jatuh tempo akan disusun AI secara bervariasi.', params: { request: { type: 'string', description: 'Kalimat lengkap, contoh: ingatkan saya besok jam 8 bayar listrik' }, task: { type: 'string' }, when: { type: 'string' } }, handler: handleReminder },
+    { name: 'finance', desc: 'KHUSUS OWNER DM. Catat, edit, rangkum, daftar, konfirmasi, export, sinkronkan Gmail, atau perbarui Google Sheets untuk transaksi keuangan pribadi. Saat meninjau pending, jangan konfirmasi notifikasi non-transaksi/nominal 0. Untuk pending_duplicate, cek pasangan: jika pasangan sudah confirmed, abaikan kandidat agar tidak menggandakan ledger; jika belum jelas, pilih gabungkan atau simpan terpisah.', params: {
+      action: { type: 'string', enum: ['record', 'summary', 'list', 'pending', 'confirm', 'update', 'export', 'sync', 'sheets'] },
       request: { type: 'string', description: 'Teks transaksi/perubahan, atau YYYY-MM-DD untuk sync' },
       period: { type: 'string', description: 'Periode YYYY-MM atau nama bulan, misalnya Juli 2026, bulan ini, atau bulan lalu' },
       transactionId: { type: 'string' },

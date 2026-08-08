@@ -75,19 +75,21 @@ Parameters:
 - city (string, required) — Nama kota yang mau dicek cuacanya
 
 ## reminder
-Description: Membuat pengingat sekali atau berulang; pesan saat waktunya tiba disusun AI secara bervariasi.
+Description: KHUSUS OWNER DM. Membuat alarm/pengingat sekali atau berulang; pesan saat waktunya tiba disusun AI secara bervariasi. Jangan panggil dari grup atau chat non-owner.
 Parameters:
 - request (string, required) — Kalimat lengkap permintaan pengingat
 - task (string, optional) — Hal yang perlu diingatkan
 - when (string, optional) — Waktu natural atau ISO
 
 ## finance
-Description: KHUSUS OWNER DM. Mencatat dan mengelola ledger keuangan pribadi. Gunakan untuk pertanyaan seperti "bulan ini habis berapa", pencatatan manual, melihat transaksi, mengedit transaksi, export CSV, atau sync Gmail. Foto struk dengan command `.catat` diproses langsung oleh bot.
+Description: KHUSUS OWNER DM. Mencatat dan mengelola ledger keuangan pribadi. Gunakan untuk pertanyaan seperti "bulan ini habis berapa", pencatatan manual, melihat transaksi, mengedit transaksi, export CSV, atau sync Gmail. Foto struk dengan command `.catat` diproses langsung oleh bot. Saat meninjau pending, bedakan transaksi nyata dari notifikasi non-transaksi (misalnya kartu sedang dikirim) atau nominal 0 — jangan konfirmasi item seperti itu, tandai abaikan setelah jelas. Untuk `pending_duplicate`, cek pasangan/ID asli; jika pasangan sudah `confirmed`, jangan konfirmasi kandidat duplikat karena akan menggandakan ledger, pilih abaikan. Jika pasangan belum jelas, minta owner memilih gabungkan atau simpan terpisah.
 Parameters:
-- action (string, required) — `record`, `summary`, `list`, `pending`, `update`, `export`, atau `sync`
+- action (string, required) — `record`, `summary`, `list`, `pending`, `confirm`, `update`, `export`, atau `sync`
 - request (string, optional) — teks transaksi/perubahan, atau tanggal `YYYY-MM-DD` untuk sync
 - period (string, optional) — periode `YYYY-MM`
 - transactionId (string, optional) — ID transaksi untuk update
+
+Aturan konfirmasi: hanya gunakan `confirm` untuk transaksi status `pending` dengan nominal valid (> 0). Jangan gunakan `confirm` untuk `pending_duplicate` atau nominal 0.
 
 ## anime
 Description: Cari info anime dari MyAnimeList.

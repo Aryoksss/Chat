@@ -31,6 +31,15 @@ function isOwnerDm(msg: IncomingMessage): boolean {
     .includes(sender)
 }
 
+function quotedTransactionId(msg: IncomingMessage): string | undefined {
+  const quoted = msg.quotedText || ''
+  return quoted.match(/·\s*([a-f0-9]{8,12})\b/i)?.[1]
+}
+
+function isNaturalConfirmation(text: string): boolean {
+  return /^(?:ya\s+)?(?:konfirmasi|simpan)(?:\s+transaksi(?:\s+pending)?)?[.!]*$/i.test(text.trim())
+}
+
 function messageTimestamp(raw: any): number {
   const value = raw?.messageTimestamp
   if (typeof value === 'number') return value < 10_000_000_000 ? value * 1000 : value
@@ -86,13 +95,16 @@ function transactionList(period?: string): string {
 export class FinanceCommandHandler {
   async handle(msg: IncomingMessage, client: WhatsAppClient): Promise<boolean> {
     const parsed = commandParts(msg.text || '')
-    if (!parsed || !COMMANDS.has(parsed.command)) return false
+    const naturalId = isNaturalConfirmation(msg.text || '') ? quotedTransactionId(msg) : undefined
+    if (!parsed && !naturalId) return false
     if (!isOwnerDm(msg)) {
       await client.sendText(msg.jid, '🔒 Fitur keuangan hanya tersedia di chat pribadi owner.', msg.raw)
       return true
     }
 
     try {
+      if (naturalId) return this.confirm(msg, client, naturalId)
+      if (!parsed || !COMMANDS.has(parsed.command)) return false
       if (parsed.command === 'catat') return this.record(msg, client, parsed.rest)
       if (parsed.command === 'laporan') return this.report(msg, client, parsed.rest)
       if (parsed.command === 'transaksi') {
@@ -107,6 +119,14 @@ export class FinanceCommandHandler {
       await client.sendText(msg.jid, `❌ Fitur keuangan gagal: ${err.message}`, msg.raw)
       return true
     }
+  }
+
+  private async confirm(msg: IncomingMessage, client: WhatsAppClient, id: string): Promise<boolean> {
+    const result = financeService.confirm(id)
+    await client.sendText(msg.jid, result.transaction
+      ? `✅ Tersimpan.\n\n${formatFinanceTransaction(result.transaction)}`
+      : `❌ ${result.error}`, msg.raw)
+    return true
   }
 
   private async record(msg: IncomingMessage, client: WhatsAppClient, request: string): Promise<boolean> {
@@ -166,9 +186,7 @@ export class FinanceCommandHandler {
     if (action === 'export') return this.export(msg, client, args)
 
     if (action === 'konfirmasi' || action === 'simpan') {
-      const result = financeService.confirm(id)
-      await client.sendText(msg.jid, result.transaction ? `✅ Tersimpan.\n\n${formatFinanceTransaction(result.transaction)}` : `❌ ${result.error}`, msg.raw)
-      return true
+      return this.confirm(msg, client, id)
     }
     if (action === 'abaikan') {
       const transaction = financeService.ignore(id)

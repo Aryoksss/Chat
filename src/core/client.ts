@@ -8,7 +8,7 @@ import { Boom } from '@hapi/boom'
 import pino from 'pino'
 import QRCode from 'qrcode'
 import NodeCache from 'node-cache'
-import { mkdir, readFile, readdir, writeFile } from 'fs/promises'
+import { mkdir, readFile, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import { config } from '../system/config.js'
 import { getGroupAccess } from '../system/group-access.js'
@@ -53,8 +53,10 @@ export class WhatsAppClient {
   // Whether we've ensured the bot's presence privacy allows the owner to see
   // the typing indicator (set once on the first successful connect).
   private presencePrivacyEnsured = false
-  // All Linked-IDs (LID) owned by this bot, so @mentions in groups are detected
-  // even when WA reports them as <lid>@lid. Loaded from tctoken-*@lid.json.
+  // Linked-IDs owned by this bot, so @mentions in groups are detected even when
+  // WA reports them as <lid>@lid. Never infer these from every tctoken file:
+  // that directory can contain contact LIDs too, which would make tagging a
+  // normal member trigger the bot.
   private botLids: string[] = []
   private botProfile: BotWhatsAppProfile | null = null
   // Message IDs already processed — prevents duplicate replies when Baileys
@@ -69,18 +71,9 @@ export class WhatsAppClient {
   // real-time), jadi tidak dibalas agar tidak "dibales lagi" pesan lama.
   private static readonly OLD_MSG_MS = 5 * 60 * 1000 // 5 menit
 
-  /** Load all bot LIDs from tctoken files in the session dir (best-effort). */
+  /** Load only configured and socket-confirmed IDs owned by this bot. */
   private async loadBotLids(): Promise<string[]> {
     const lids = new Set<string>([config.BOT_LID].filter(Boolean))
-    try {
-      const files = await readdir(config.SESSION_DIR)
-      for (const f of files) {
-        const m = /^tctoken-(\d+)@lid\.json$/.exec(f)
-        if (m) lids.add(m[1])
-      }
-    } catch {
-      // session dir unavailable — fall back to config/socket ids
-    }
     if (this.sock?.user?.id) lids.add(this.sock.user.id.split(':')[0])
     return [...lids].filter(Boolean)
   }

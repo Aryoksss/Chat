@@ -23,6 +23,24 @@ interface OAuthTokenFile {
   scope?: string
 }
 
+interface SharedRefreshResult {
+  accessToken: string
+  expiryDate: number
+}
+
+// Gmail polling and Sheets sync use separate client instances, but share one
+// token file. Serialize refreshes so both clients cannot rename the same .tmp
+// file at once.
+let sharedRefreshPromise: Promise<SharedRefreshResult> | null = null
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function isTransient(status: number): boolean {
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504
+}
+
 interface GmailHeader {
   name?: string
   value?: string
@@ -181,15 +199,19 @@ export class GmailReadOnlyClient {
     return data.labels?.find(label => label.name?.toLocaleLowerCase('en-US') === name.toLocaleLowerCase('en-US'))?.id
   }
 
-  private async api<T>(path: string, retry = true): Promise<T> {
+  private async api<T>(path: string, attempt = 0): Promise<T> {
     const accessToken = await this.accessToken()
     const response = await fetch(`https://gmail.googleapis.com/gmail/v1${path}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
       signal: AbortSignal.timeout(30_000),
     })
-    if (response.status === 401 && retry) {
+    if (response.status === 401 && attempt === 0) {
       if (this.token) this.token.expiry_date = 0
-      return this.api<T>(path, false)
+      return this.api<T>(path, 1)
+    }
+    if (isTransient(response.status) && attempt < 2) {
+      await sleep(500 * (attempt + 1))
+      return this.api<T>(path, attempt + 1)
     }
     if (!response.ok) {
       const detail = (await response.text()).slice(0, 300)
@@ -206,30 +228,48 @@ export class GmailReadOnlyClient {
     if (!this.client || !this.token?.refresh_token) {
       throw new Error('Refresh token Gmail belum tersedia. Jalankan npm run finance:gmail-auth')
     }
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: this.client.client_id,
-        client_secret: this.client.client_secret,
-        refresh_token: this.token.refresh_token,
-        grant_type: 'refresh_token',
-      }),
-      signal: AbortSignal.timeout(30_000),
-    })
-    if (!response.ok) {
-      const detail = (await response.text()).slice(0, 300)
-      throw new Error(`OAuth Gmail gagal (${response.status}): ${detail}`)
+    if (sharedRefreshPromise) {
+      const shared = await sharedRefreshPromise
+      this.token = { ...this.token, access_token: shared.accessToken, expiry_date: shared.expiryDate }
+      return shared.accessToken
     }
-    const refreshed = await response.json() as OAuthTokenFile
-    if (!refreshed.access_token) throw new Error('OAuth Gmail tidak mengembalikan access token')
-    this.token = {
-      ...this.token,
-      ...refreshed,
-      expiry_date: Date.now() + Number(refreshed.expires_in || 3600) * 1000,
+
+    sharedRefreshPromise = (async () => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const response = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: this.client!.client_id,
+            client_secret: this.client!.client_secret,
+            refresh_token: this.token!.refresh_token!,
+            grant_type: 'refresh_token',
+          }),
+          signal: AbortSignal.timeout(30_000),
+        })
+        if (response.ok) {
+          const refreshed = await response.json() as OAuthTokenFile
+          if (!refreshed.access_token) throw new Error('OAuth Gmail tidak mengembalikan access token')
+          const expiryDate = Date.now() + Number(refreshed.expires_in || 3600) * 1000
+          this.token = { ...this.token, ...refreshed, expiry_date: expiryDate }
+          await this.saveToken()
+          return { accessToken: refreshed.access_token, expiryDate }
+        }
+        const detail = (await response.text()).slice(0, 300)
+        if (!isTransient(response.status) || attempt === 2) {
+          throw new Error(`OAuth Gmail gagal (${response.status}): ${detail}`)
+        }
+        await sleep(500 * (attempt + 1))
+      }
+      throw new Error('OAuth Gmail gagal setelah retry')
+    })()
+
+    try {
+      const shared = await sharedRefreshPromise
+      return shared.accessToken
+    } finally {
+      sharedRefreshPromise = null
     }
-    await this.saveToken()
-    return refreshed.access_token
   }
 
   private async loadCredentials(): Promise<void> {
@@ -249,7 +289,7 @@ export class GmailReadOnlyClient {
   private async saveToken(): Promise<void> {
     if (!this.token) return
     const file = config.FINANCE_GMAIL_TOKEN_FILE
-    const temporary = `${file}.tmp`
+    const temporary = `${file}.${process.pid}.tmp`
     await mkdir(dirname(file), { recursive: true, mode: 0o700 })
     await writeFile(temporary, `${JSON.stringify(this.token, null, 2)}\n`, { mode: 0o600 })
     await rename(temporary, file)

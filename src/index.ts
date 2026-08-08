@@ -12,6 +12,7 @@ import { loadGroupAccess } from './system/group-access.js'
 import { reminderManager } from './reminders/manager.js'
 import { botDatabase } from './storage/database.js'
 import { financeManager } from './finance/manager.js'
+import { ownerGreetingManager } from './greetings/manager.js'
 
 async function main() {
   console.log(`
@@ -53,6 +54,7 @@ async function main() {
   await client.start()
   reminderManager.start(client)
   financeManager.start(client)
+  ownerGreetingManager.start(client, personas.get('owner'))
 
   // Handle graceful shutdown
   let shuttingDown = false
@@ -63,6 +65,7 @@ async function main() {
     await messageHandler.shutdown()
     reminderManager.stop()
     financeManager.stop()
+    ownerGreetingManager.stop()
     await client.stop()
     botDatabase.close()
     process.exit(0)

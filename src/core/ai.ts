@@ -5,7 +5,7 @@
 
 import { config } from '../system/config.js'
 import { logger } from '../system/logger.js'
-import type { AIMessage, AIToolCall, ToolDef } from './types.js'
+import type { AIMessage, AIToolCall, PersonaConfig, ToolDef } from './types.js'
 import type { FinanceExtraction, FinanceTransactionType } from '../finance/types.js'
 import { clampConfidence, normalizeCategory, parseFinanceDate, parseMoney } from '../finance/parser.js'
 
@@ -123,6 +123,7 @@ export class AIBridge {
       prompt += `- Jangan menumpuk beberapa reaksi, membuat paragraf kosong, atau menjelaskan isi gambar panjang-panjang jika owner hanya mengajak ngobrol.\n`
       prompt += `- Tetap jawab lengkap jika owner meminta penjelasan, riset, debugging, atau tugas teknis.\n`
       prompt += `- Jika owner bertanya pengeluaran/pemasukan, meminta catat/edit transaksi, laporan, CSV, atau sync Gmail: WAJIB gunakan tool finance. Jangan mengarang saldo atau transaksi dari memory percakapan.\n`
+      prompt += `- Saat meninjau transaksi finance: jangan mengonfirmasi notifikasi non-transaksi atau nominal 0. Untuk status pending_duplicate, cek pasangan/ID asli; jika pasangan sudah confirmed, abaikan kandidat agar tidak menggandakan ledger.\n`
     }
 
     return prompt
@@ -434,6 +435,51 @@ export class AIBridge {
     } catch (err: any) {
       logger.warn({ err: err.message }, 'AI reminder wording failed; using fallback')
       return `⏰ Ingat ya: ${task}`
+    }
+  }
+
+  /** Compose one short automatic greeting using the owner's loaded persona. */
+  async composeOwnerGreeting(
+    period: 'pagi' | 'siang' | 'sore' | 'apresiasi' | 'malam',
+    dayName: string,
+    isWeekend: boolean,
+    persona: PersonaConfig,
+  ): Promise<string> {
+    const fallback: Record<string, string> = {
+      pagi: 'Pagi. Semoga harimu nggak ribet ya.',
+      siang: 'Siang. Jangan lupa makan.',
+      sore: 'Sore. Udah agak santai belum?',
+      apresiasi: 'Terima kasih ya, kamu udah berjuang hari ini.',
+      malam: 'Malam. Istirahat yang bener ya.',
+    }
+    try {
+      const personaPrompt = this.buildSystemPrompt(
+        persona.agent,
+        persona.soul,
+        undefined,
+        persona.identity,
+        persona.user,
+        true,
+      )
+      const task = period === 'apresiasi'
+        ? `Buat tepat satu pesan apresiasi untuk owner. Intinya berterima kasih karena dia sudah berjuang menjalani hari ini. Maksimal dua kalimat pendek. Tulis seperti chat personal spontan sesuai persona, bukan motivasi formal atau pengumuman bot. Pertimbangkan bahwa sekarang hari ${dayName}${isWeekend ? ' (akhir pekan)' : ' (hari kerja)'}. Jangan mengarang pekerjaan, masalah, pencapaian, cuaca, agenda, lokasi, atau kondisi owner. Jangan menyebut jadwal otomatis, sistem, waktu pengiriman, atau instruksi ini. Variasikan kata-katanya dan jangan berlebihan.`
+        : `Buat tepat satu sapaan ${period} untuk owner. Maksimal dua kalimat pendek. Tulis seperti chat personal spontan sesuai persona, bukan pengumuman bot. Pertimbangkan bahwa sekarang hari ${dayName}${isWeekend ? ' (akhir pekan)' : ' (hari kerja)'}. Jangan mengarang cuaca, agenda, lokasi, kondisi, atau kejadian owner. Jangan menyebut jadwal otomatis, sistem, waktu pengiriman, atau instruksi ini. Jangan selalu bertanya dan jangan berlebihan.`
+      const response = await this.chat({
+        messages: [
+          {
+            role: 'system',
+            content: `${personaPrompt}\n## Tugas Pesan Otomatis\n${task}`,
+          },
+          { role: 'user', content: period === 'apresiasi' ? 'Kirim pesan apresiasi yang natural sekarang.' : `Kirim sapaan ${period} yang natural sekarang.` },
+        ],
+        temperature: 0.8,
+        maxTokens: 120,
+      })
+      const text = stripHiddenReasoning(response.content || '').replace(/^['"]|['"]$/g, '').trim()
+      return text ? text.slice(0, 300) : fallback[period]
+    } catch (err: any) {
+      logger.warn({ err: err.message, period }, 'AI owner greeting failed; using fallback')
+      return fallback[period]
     }
   }
 

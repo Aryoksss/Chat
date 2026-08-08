@@ -12,6 +12,8 @@ import { handleSmeme } from '../src/tools/handlers/smeme.js'
 import { decideAutoVoice, prepareVoiceText } from '../src/audio/auto-voice.js'
 import { normalizeForHuTaoVoice, numberToIndonesian } from '../src/audio/text-normalizer.js'
 import { isThreadsUrl } from '../src/tools/handlers/threads-dl.js'
+import { handleReminder } from '../src/tools/handlers/reminder.js'
+import { ownerGreetingSchedule } from '../src/greetings/manager.js'
 
 test('Threads downloader accepts only HTTPS Threads URLs', () => {
   assert.equal(isThreadsUrl('https://www.threads.com/@z33ven/post/DbgbbgYAWSF/media'), true)
@@ -34,6 +36,49 @@ test('reminder parser understands relative, daily, and weekly Indonesian time', 
   const weekly = parseReminderRequest('ingatkan grup tiap Jumat jam 9 rapat mingguan', now)
   assert.equal(weekly?.task, 'rapat mingguan')
   assert.equal(weekly?.recurrence, 'weekly:5')
+})
+
+test('reminder tool rejects group contexts', async () => {
+  const result = await handleReminder(
+    { request: 'ingatkan aku 10 menit lagi minum obat' },
+    { jid: 'group@g.us', participant: 'member@lid', sock: {} },
+  )
+  assert.equal(result.success, false)
+  assert.match(result.error || '', /owner/i)
+})
+
+test('owner greeting schedule adapts between weekdays and weekends', () => {
+  const weekday = ownerGreetingSchedule(new Date('2026-08-03T06:45:00+07:00'))
+  const weekend = ownerGreetingSchedule(new Date('2026-08-08T08:00:00+07:00'))
+
+  assert.equal(weekday.isWeekend, false)
+  assert.equal(weekend.isWeekend, true)
+  assert.equal(weekday.date, '2026-08-03')
+  assert.equal(weekend.date, '2026-08-08')
+  assert.ok(weekday.slots.find(slot => slot.period === 'pagi')!.targetMinute < 7 * 60 + 1)
+  assert.ok(weekend.slots.find(slot => slot.period === 'pagi')!.targetMinute >= 7 * 60 + 30)
+  assert.ok(weekday.slots.find(slot => slot.period === 'malam')!.targetMinute >= 21 * 60 + 50)
+  assert.ok(weekend.slots.find(slot => slot.period === 'malam')!.targetMinute <= 22 * 60 + 15)
+  assert.deepEqual(weekday.slots.map(slot => slot.period), ['pagi', 'siang', 'sore', 'apresiasi', 'malam'])
+  const appreciation = weekend.slots.find(slot => slot.period === 'apresiasi')!
+  assert.ok(appreciation.targetMinute >= 19 * 60)
+  assert.ok(appreciation.targetMinute <= 20 * 60)
+})
+
+test('owner greeting claims prevent duplicate sends', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wa-bot-db-'))
+  const db = new BotDatabase(join(dir, 'test.db'))
+  try {
+    assert.equal(db.claimOwnerGreeting('2026-08-08', 'pagi'), true)
+    assert.equal(db.claimOwnerGreeting('2026-08-08', 'pagi'), false)
+    db.releaseOwnerGreeting('2026-08-08', 'pagi')
+    assert.equal(db.claimOwnerGreeting('2026-08-08', 'pagi'), true)
+    db.completeOwnerGreeting('2026-08-08', 'pagi')
+    assert.equal(db.claimOwnerGreeting('2026-08-08', 'pagi'), false)
+  } finally {
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('database persists member directory and outgoing reply IDs', () => {

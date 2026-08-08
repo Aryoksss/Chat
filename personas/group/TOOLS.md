@@ -67,13 +67,6 @@ Description: Cek cuaca kota tertentu.
 Parameters:
 - city (string, required) — Nama kota
 
-## reminder
-Description: Membuat pengingat sekali atau berulang; pesan saat waktunya tiba disusun AI secara bervariasi.
-Parameters:
-- request (string, required) — Kalimat lengkap permintaan pengingat
-- task (string, optional) — Hal yang perlu diingatkan
-- when (string, optional) — Waktu natural atau ISO
-
 ## anime
 Description: Cari info anime.
 Parameters:

@@ -118,6 +118,15 @@ export class BotDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(status, due_at);
 
+      CREATE TABLE IF NOT EXISTS owner_greeting_runs (
+        greeting_date TEXT NOT NULL,
+        period TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'processing',
+        created_at INTEGER NOT NULL,
+        sent_at INTEGER,
+        PRIMARY KEY (greeting_date, period)
+      );
+
       CREATE TABLE IF NOT EXISTS tool_contexts (
         jid TEXT NOT NULL,
         tool TEXT NOT NULL,
@@ -185,6 +194,8 @@ export class BotDatabase {
     this.db.prepare('DELETE FROM outgoing_messages WHERE created_at < ?').run(cutoff)
     this.db.prepare(`UPDATE media_jobs SET status='failed', error='Bot restart sebelum job selesai', updated_at=? WHERE status IN ('queued','running')`).run(Date.now())
     this.db.prepare(`UPDATE reminders SET status='active' WHERE status='processing'`).run()
+    this.db.prepare(`DELETE FROM owner_greeting_runs WHERE status='processing'`).run()
+    this.db.prepare(`DELETE FROM owner_greeting_runs WHERE created_at < ?`).run(Date.now() - 60 * 24 * 60 * 60 * 1000)
     this.db.prepare(`UPDATE finance_report_runs SET status='failed' WHERE status='processing'`).run()
     this.db.prepare(`UPDATE finance_imports SET status='failed', error_code='interrupted' WHERE status='processing'`).run()
     this.db.prepare('DELETE FROM tool_contexts WHERE updated_at < ?').run(Date.now() - 24 * 60 * 60 * 1000)
@@ -345,6 +356,28 @@ export class BotDatabase {
   cancelReminder(jid: string, sender: string, id: string): number {
     const result = this.db.prepare(`UPDATE reminders SET status='cancelled' WHERE jid=? AND sender=? AND id LIKE ? AND status IN ('active','processing')`).run(jid, sender, `${id}%`)
     return Number(result.changes)
+  }
+
+  claimOwnerGreeting(date: string, period: string): boolean {
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO owner_greeting_runs(greeting_date,period,status,created_at)
+      VALUES(?,?,'processing',?)
+    `).run(date, period, Date.now())
+    return Number(result.changes) > 0
+  }
+
+  completeOwnerGreeting(date: string, period: string): void {
+    this.db.prepare(`
+      UPDATE owner_greeting_runs SET status='sent', sent_at=?
+      WHERE greeting_date=? AND period=? AND status='processing'
+    `).run(Date.now(), date, period)
+  }
+
+  releaseOwnerGreeting(date: string, period: string): void {
+    this.db.prepare(`
+      DELETE FROM owner_greeting_runs
+      WHERE greeting_date=? AND period=? AND status='processing'
+    `).run(date, period)
   }
 
   setToolContext(jid: string, tool: string, payload: unknown): void {

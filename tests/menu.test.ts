@@ -64,7 +64,8 @@ test('group menu excludes owner commands and private pap tool', () => {
   assert.equal(rows.some((row: any) => row.rowId.includes('pap')), false)
   assert.equal(rows.some((row: any) => row.rowId.includes('keuangan')), false)
   assert.ok(rows.some((row: any) => row.rowId === '!jobs'))
-  assert.ok(rows.some((row: any) => row.rowId === '!reminders'))
+  assert.equal(rows.some((row: any) => row.rowId === '!reminders'), false)
+  assert.equal(rows.some((row: any) => row.rowId === '!reminder'), false)
   assert.ok(rows.some((row: any) => row.rowId === '!anggota'))
 })
 
@@ -72,8 +73,11 @@ test('owner menu includes owner commands', () => {
   const handler = new CommandHandler() as any
   const sections = handler.buildMenuSections(toolsRegistry.getDefinitions(), '.', true)
   const owner = sections.find((section: any) => section.title === 'Owner')
+  const rows = sections.flatMap((section: any) => section.rows)
 
   assert.ok(owner)
+  assert.ok(rows.some((row: any) => row.rowId === '.reminder'))
+  assert.ok(rows.some((row: any) => row.rowId === '.reminders'))
   assert.ok(owner.rows.some((row: any) => row.rowId === '/groups'))
   assert.ok(owner.rows.some((row: any) => row.rowId === '/group-allow'))
   assert.ok(owner.rows.some((row: any) => row.rowId === '/stickers'))
