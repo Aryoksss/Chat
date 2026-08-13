@@ -11,7 +11,7 @@ import { memoryManager, memoryScope } from '../memory/manager.js'
 import { cmdHandler } from '../system/cmd-handler.js'
 import { toolExecutor } from '../tools/executor.js'
 import { audioManager } from '../audio/manager.js'
-import { decideAutoVoice, isExplicitVoiceRequest } from '../audio/auto-voice.js'
+import { decideAutoVoice, isExplicitVoiceRequest, normalizePersonaPronouns, prepareUserFacingResponse } from '../audio/auto-voice.js'
 import { get4khdContext, get4khdContinuation, parseFourkhdSearchIntent } from '../tools/handlers/fourkhd.js'
 import { getAnimeContext } from '../tools/handlers/anime-dl.js'
 import { isThreadsUrl } from '../tools/handlers/threads-dl.js'
@@ -24,6 +24,7 @@ import type { WhatsAppClient } from '../core/client.js'
 import { botDatabase } from '../storage/database.js'
 import { mediaJobManager } from '../jobs/media-jobs.js'
 import { formatReminderTime } from '../reminders/parser.js'
+import { isReminderAllowedContext } from '../tools/handlers/reminder.js'
 import { financeCommandHandler } from '../finance/commands.js'
 
 // ---- Rate Limiter Config ----
@@ -69,13 +70,12 @@ function hasCommandPrefix(text: string): boolean {
   return config.PREFIXES.some(prefix => normalized.startsWith(prefix))
 }
 
-function isOwnerDm(msg: IncomingMessage): boolean {
-  if (msg.isGroup) return false
-  const sender = msg.sender.replace(/[^0-9]/g, '')
-  return [config.OWNER_NUMBER, config.OWNER_LID]
-    .filter(Boolean)
-    .map(value => value.replace(/[^0-9]/g, ''))
-    .includes(sender)
+function isReminderAllowedMessage(msg: IncomingMessage): boolean {
+  return isReminderAllowedContext({
+    jid: msg.jid,
+    participant: msg.participant,
+    rawMessage: msg.raw,
+  })
 }
 
 function getCommandParts(text: string): { prefix: string; rest: string } | null {
@@ -219,6 +219,49 @@ export class MessageHandler {
     return new Promise(r => setTimeout(r, ms))
   }
 
+  /** Run slow RVC work outside the per-chat message queue. */
+  private queueVoiceReply(
+    msg: IncomingMessage,
+    client: WhatsAppClient,
+    voiceText: string,
+    fallbackText: string,
+    reason: string,
+  ): void {
+    void (async () => {
+      try {
+        await client.sendPresence(msg.jid, 'recording')
+        const recordingTimer = setInterval(() => {
+          client.sendPresence(msg.jid, 'recording').catch(() => {})
+        }, 8000)
+        let voiceBuffer: Buffer | null = null
+        try {
+          voiceBuffer = await audioManager.generateHuTaoVoice(voiceText)
+        } finally {
+          clearInterval(recordingTimer)
+        }
+
+        if (voiceBuffer) {
+          const outPath = join(tmpdir(), `hutao_vn_${Date.now()}.ogg`)
+          try {
+            await writeFile(outPath, voiceBuffer)
+            if (await client.sendFile(msg.jid, outPath, 'audio', undefined, msg.raw)) {
+              this.lastVoiceReplyAt.set(msg.jid, Date.now())
+              logger.info({ jid: msg.jid, reason }, 'Hu Tao voice-note reply sent')
+              return
+            }
+          } finally {
+            await unlink(outPath).catch(() => {})
+          }
+        }
+
+        await client.sendText(msg.jid, fallbackText, msg.raw)
+      } catch (err) {
+        logger.error({ err, jid: msg.jid }, 'Background VN generation failed')
+        await client.sendText(msg.jid, fallbackText, msg.raw).catch(() => {})
+      }
+    })()
+  }
+
   /** Public entry — called from client.ts */
   async handle(msg: IncomingMessage, client: WhatsAppClient): Promise<void> {
     if (!this.acceptingMessages) return
@@ -228,12 +271,13 @@ export class MessageHandler {
     // A reply from another bot can look exactly like a user reply to our bot.
     // Drop it before sticker archiving or AI processing so two bots cannot start
     // a reply loop or keep exchanging contextual stickers.
-    if (msg.isGroup && config.IGNORED_BOT_IDS.includes(msg.sender)) {
+    const isIgnoredBotSticker = msg.messageType === 'sticker' || !msg.text?.trim()
+    if (msg.isGroup && config.IGNORED_BOT_IDS.includes(msg.sender) && isIgnoredBotSticker) {
       logger.info({
         jid: msg.jid,
         sender: msg.sender,
         text: msg.text?.slice(0, 80),
-      }, 'Group message ignored (known bot sender)')
+      }, 'Group sticker/message ignored (known bot sender)')
       return
     }
 
@@ -493,6 +537,24 @@ export class MessageHandler {
       return
     }
 
+    // Deterministic media search routing. Search requests must reach the
+    // correct native resolver even when the model declines to call a tool.
+    const mediaSearch = this.getNaturalMediaSearchCommand(msg.text)
+    if (mediaSearch) {
+      const toolContext = {
+        sock: client.sock,
+        jid: msg.jid,
+        participant: msg.participant,
+        rawMessage: msg.raw,
+        mediaJobId: msg.mediaJobId,
+        suppressTextResponse: false,
+      }
+      await client.sendPresence(msg.jid, 'composing')
+      const result = await toolExecutor.executeToolCall(mediaSearch.toolName, mediaSearch.args, toolContext)
+      if (!toolContext.suppressTextResponse && result.trim()) await client.sendText(msg.jid, result, msg.raw)
+      return
+    }
+
     // A bare media URL is an explicit download request. Route it directly
     // so the model cannot answer from stale conversation context without
     // invoking the downloader.
@@ -503,6 +565,7 @@ export class MessageHandler {
         jid: msg.jid,
         participant: msg.participant,
         downloadMedia: async (m: any) => client.downloadMedia(m),
+        getMessage: async (key: any) => client.getMessage(key),
         rawMessage: msg.raw,
         rawMessages: albumMessages,
         mediaJobId: msg.mediaJobId,
@@ -609,6 +672,7 @@ export class MessageHandler {
         jid: msg.jid,
         participant: msg.participant,
         downloadMedia: async (m: any) => client.downloadMedia(m),
+        getMessage: async (key: any) => client.getMessage(key),
         rawMessage: msg.raw,
         rawMessages: albumMessages,
         mediaJobId: msg.mediaJobId,
@@ -765,6 +829,7 @@ export class MessageHandler {
         jid: msg.jid,
         participant: msg.participant,
         downloadMedia: async (m: any) => client.downloadMedia(m),
+        getMessage: async (key: any) => client.getMessage(key),
         rawMessage: msg.raw, // Allow tools (like sticker maker) to access the raw message directly
         rawMessages: albumMessages,
         mediaJobId: msg.mediaJobId,
@@ -773,12 +838,13 @@ export class MessageHandler {
       const handlerMap = toolExecutor.createHandlerMap(toolContext)
       const history = this.getConversationHistory(scope)
 
-      const response = await aiBridge.chatWithTools(
+      const rawResponse = await aiBridge.chatWithTools(
         systemPrompt, userContent, persona.tools, handlerMap, history,
       )
+      const response = normalizePersonaPronouns(prepareUserFacingResponse(rawResponse))
 
       // Debug log dulu sebelum dikirim
-      logger.info({ response }, 'RESPONSE-before-send')
+      logger.info({ response: rawResponse }, 'RESPONSE-before-send')
 
       // Never leak legacy agent syntax or local filesystem commands into chat.
       if (/\bopenclaw\b|(?:^|\n)\s*exec\s+\/|MEDIA:\s*\//i.test(response || '')) {
@@ -834,43 +900,15 @@ export class MessageHandler {
           maxChars: config.HUTAO_AUTO_VOICE_MAX_CHARS,
           lastVoiceAt: this.lastVoiceReplyAt.get(msg.jid),
         })
-        let sentAsVoice = false
+        let voiceQueued = false
 
         if (voiceDecision.send) {
-          try {
-            // The TTS/RVC pipeline can take several seconds. Stop the composing
-            // timer so it does not overwrite WhatsApp's recording indicator.
-            stopTyping()
-            await client.sendPresence(msg.jid, 'recording')
-            const recordingTimer = setInterval(() => {
-              client.sendPresence(msg.jid, 'recording').catch(() => {})
-            }, 8000)
-            let voiceBuffer: Buffer | null = null
-            try {
-              voiceBuffer = await audioManager.generateHuTaoVoice(voiceDecision.voiceText)
-            } finally {
-              clearInterval(recordingTimer)
-            }
-
-            if (voiceBuffer) {
-              const outPath = join(tmpdir(), `hutao_vn_${Date.now()}.ogg`)
-              try {
-                await writeFile(outPath, voiceBuffer)
-                sentAsVoice = await client.sendFile(msg.jid, outPath, 'audio', undefined, msg.raw)
-              } finally {
-                await unlink(outPath).catch(() => {})
-              }
-              if (sentAsVoice) {
-                this.lastVoiceReplyAt.set(msg.jid, Date.now())
-                logger.info({ jid: msg.jid, reason: voiceDecision.reason }, 'Hu Tao voice-note reply sent')
-              }
-            }
-          } catch (err) {
-            logger.error({ err }, 'Failed to send VN response, falling back to text')
-          }
+          stopTyping()
+          this.queueVoiceReply(msg, client, voiceDecision.voiceText, response, voiceDecision.reason)
+          voiceQueued = true
         }
 
-        if (!sentAsVoice) {
+        if (!voiceQueued) {
           // Send standard text if voice was not selected or generation failed.
           await client.sendPresence(msg.jid, 'composing').catch(() => {})
           await waitForTypingVisible()
@@ -1006,8 +1044,8 @@ export class MessageHandler {
     const [command, id] = parts.rest.split(/\s+/)
     const normalized = command?.toLowerCase()
     const isReminderCommand = ['reminders', 'pengingat', 'cancel-reminder', 'hapus-pengingat'].includes(normalized || '')
-    if (isReminderCommand && !isOwnerDm(msg)) {
-      await client.sendText(msg.jid, '🔒 Fitur alarm/reminder hanya tersedia di chat pribadi owner.', msg.raw)
+    if (isReminderCommand && !isReminderAllowedMessage(msg)) {
+      await client.sendText(msg.jid, '🔒 Reminder grup tersedia untuk semua anggota; reminder chat pribadi hanya untuk owner.', msg.raw)
       return true
     }
     if (normalized === 'reminders' || normalized === 'pengingat') {
@@ -1017,7 +1055,7 @@ export class MessageHandler {
         return true
       }
       const lines = reminders.map(reminder =>
-        `⏰ ${reminder.id} · ${formatReminderTime(reminder.dueAt)}${reminder.recurrence ? ' · berulang' : ''}\n   ${reminder.task}`
+        `⏰ ${reminder.id} · ${formatReminderTime(reminder.dueAt)}${reminder.recurrence ? ' · berulang' : ''}${reminder.mentions.length ? ` · ${reminder.mentions.length} mention` : ''}\n   ${reminder.task}`
       )
       await client.sendText(msg.jid, `*Pengingat aktif*\n\n${lines.join('\n\n')}\n\nBatalkan: .cancel-reminder <id>`, msg.raw)
       return true
@@ -1037,6 +1075,27 @@ export class MessageHandler {
   private isDirectStickerRequest(text: string): boolean {
     return /\b(sticker|stiker)\b/i.test(text || '') &&
       /\b(kirim|kirimkan|pakai|balas|jawab|minta|kasih|dong|please)\b/i.test(text || '')
+  }
+
+  private getNaturalMediaSearchCommand(text: string): { toolName: 'pinterest-search' | 'meme-search'; args: { query: string; maxResults: number } } | null {
+    const value = (text || '').trim()
+    if (!value || hasCommandPrefix(value)) return null
+    if (!/\b(cari(?:in|kan)?|temukan|find)\b/i.test(value)) return null
+    const pinterest = /\bpinterest\b|\bpin(?:terest)?\b/i.test(value)
+    const meme = /\b(meme|gif|reaction)\b/i.test(value)
+    if (!pinterest && !meme) return null
+    const query = value
+      .replace(/\b(cari(?:in|kan)?|temukan|find)\b/gi, '')
+      .replace(/\b(gambar|foto|meme|gif|reaction)\b/gi, '')
+      .replace(/\b(di|dari|pinterest|pin|dong|please|tolong|yang|lagi|sedang|trending|trend)\b/gi, '')
+      .replace(/[?!.,]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!query) return null
+    return {
+      toolName: pinterest ? 'pinterest-search' : 'meme-search',
+      args: { query, maxResults: pinterest ? 4 : 6 },
+    }
   }
 
   private getAutoStickerContext(msg: IncomingMessage): string | null {
@@ -1139,6 +1198,7 @@ export class MessageHandler {
       jid: msg.jid,
       participant: msg.participant,
       downloadMedia: async (m: any) => client.downloadMedia(m),
+      getMessage: async (key: any) => client.getMessage(key),
       rawMessage: msg.raw, // Allow tools (like sticker maker) to read the replied image
       mediaJobId: msg.mediaJobId,
       suppressTextResponse: false,
@@ -1238,6 +1298,7 @@ export class MessageHandler {
       case 'ig': case 'instagram': parsed.url = args[0] || ''; break
       case 'tt': case 'tiktok': parsed.url = args[0] || ''; break
       case 'tw': case 'twitter': parsed.url = args[0] || ''; break
+      case 'pin': case 'pinterest': parsed.query = args.join(' '); break
       case 'th': case 'threads': parsed.url = args[0] || ''; break
       case 'brainly': parsed.query = args.join(' '); break
       case 'qr': parsed.text = args.join(' '); break
@@ -1263,6 +1324,7 @@ const PREFIX_MAP: Record<string, string> = {
   'ig': 'ig-dl', 'instagram': 'ig-dl',
   'tt': 'tt-dl', 'tiktok': 'tt-dl',
   'tw': 'tw-dl', 'twitter': 'tw-dl',
+  'pin': 'pinterest-search', 'pinterest': 'pinterest-search',
   'th': 'threads-dl', 'threads': 'threads-dl',
   'brainly': 'brainly', 'qr': 'qr',
   'img': 'img-gen', 'image': 'img-gen', 'gambar': 'img-gen',

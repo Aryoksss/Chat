@@ -31,7 +31,8 @@ export function isExplicitVoiceRequest(text: string): boolean {
 
 /** Make model output pleasant for speech without changing its meaning. */
 export function prepareVoiceText(text: string): string {
-  return (text || '')
+  const ttsMatch = (text || '').match(/\[\[tts:text\]\]([\s\S]*?)\[\[\/tts:text\]\]/i)
+  return (ttsMatch ? ttsMatch[1] : text || '')
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/\[([^\]]+)]\([^)]+\)/g, '$1')
     .replace(/https?:\/\/\S+/gi, 'link')
@@ -39,6 +40,23 @@ export function prepareVoiceText(text: string): string {
     .replace(/[\p{Extended_Pictographic}\uFE0F]/gu, '')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+/** Remove internal voice protocol markers before a response reaches WhatsApp. */
+export function prepareUserFacingResponse(text: string): string {
+  const ttsMatch = (text || '').match(/\[\[tts:text\]\]([\s\S]*?)\[\[\/tts:text\]\]/i)
+  return (ttsMatch ? ttsMatch[1] : text || '')
+    .replace(/\[\[audio_as_voice\]\]/gi, '')
+    .replace(/\[\[tts:text\]\]|\[\[\/tts:text\]\]/gi, '')
+    .replace(/^\s*`([\s\S]*?)`\s*$/, '$1')
+    .trim()
+}
+
+/** Enforce the persona's forbidden Indonesian pronouns at the final boundary. */
+export function normalizePersonaPronouns(text: string): string {
+  return (text || '')
+    .replace(/\b(?:lu|loe|elo)\b/gi, 'kamu')
+    .replace(/\b(?:gw|gue|gua)\b/gi, 'aku')
 }
 
 /**

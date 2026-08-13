@@ -36,8 +36,25 @@ export interface BotWhatsAppProfile {
 }
 
 const logger = pino({ transport: { target: 'pino-pretty' }, level: config.LOG_LEVEL })
+const LIST_MENU_SEND_TIMEOUT_MS = 7000
 
 export type MessageHandlerFn = (msg: IncomingMessage) => Promise<void>
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+    promise.then(
+      value => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      error => {
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
+}
 
 export class WhatsAppClient {
   public sock!: WASocket
@@ -47,6 +64,7 @@ export class WhatsAppClient {
   private isConnecting = false // Prevent concurrent connections
   private shuttingDown = false
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private restrictedRestartTimer: ReturnType<typeof setTimeout> | null = null
   // In-memory store: lets Baileys retry failed messages (needs getMessage) and
   // answer group metadata without hammering the server every send.
   private store: ReturnType<typeof makeInMemoryStore> | null = null
@@ -193,6 +211,10 @@ export class WhatsAppClient {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
+    }
+    if (this.restrictedRestartTimer) {
+      clearTimeout(this.restrictedRestartTimer)
+      this.restrictedRestartTimer = null
     }
     if (this.sock) {
       try {
@@ -376,8 +398,12 @@ export class WhatsAppClient {
   /** Send a text message — with a single retry in case the socket was mid-reconnect.
    *  Pass `quoted` (the user's raw WAMessage) to reply to that message instead of
    *  sending a fresh chat bubble. */
-  async sendText(jid: string, text: string, quoted?: any): Promise<boolean> {
-    const mentions = await this.resolveTextMentions(jid, text)
+  async sendText(jid: string, text: string, quoted?: any, explicitMentions: string[] = []): Promise<boolean> {
+    const resolvedMentions = await this.resolveTextMentions(jid, text)
+    const mentions = Array.from(new Set([
+      ...explicitMentions.filter(mention => typeof mention === 'string' && mention.includes('@')),
+      ...resolvedMentions,
+    ]))
     const doSend = async (): Promise<boolean> => {
       try {
         logger.info({ jid, textLength: text?.length, textPreview: text?.substring(0, 50), mentionCount: mentions.length, isReply: Boolean(quoted) }, 'sendText: sending')
@@ -513,13 +539,15 @@ export class WhatsAppClient {
     }>
   ): Promise<boolean> {
     try {
-      const result = await this.sock.sendMessage(jid, {
+      const result = await withTimeout(this.sock.sendMessage(jid, {
         text,
         footer,
         title,
-        buttonText,
-        sections,
-      } as any)
+        nativeFlow: [{
+          text: buttonText,
+          sections,
+        }],
+      } as any), LIST_MENU_SEND_TIMEOUT_MS, 'sendListMenu')
       this.rememberSentResult(jid, result, 'list')
       return true
     } catch (err) {
@@ -666,6 +694,19 @@ export class WhatsAppClient {
     }
   }
 
+  /** Load a previously seen message from the in-memory store. */
+  async getMessage(key: any): Promise<WAMessage | null> {
+    try {
+      for (const jid of [key?.remoteJidAlt, key?.remoteJid].filter(Boolean)) {
+        const message = await this.store?.loadMessage(jid, key?.id)
+        if (message) return message
+      }
+    } catch (err) {
+      logger.debug({ error: err instanceof Error ? err.message : String(err) }, 'Failed to load message from store')
+    }
+    return null
+  }
+
   /** Get connection status */
   get status(): { connected: boolean } {
     return { connected: this.connected }
@@ -700,8 +741,19 @@ export class WhatsAppClient {
       if (isRestricted) {
         logger.error(
           { statusCode },
-          '⚠️ WhatsApp is restricting this account (403/503/banned). STOPPING auto-reconnect to avoid worsening the restriction. Restart the bot manually later (after the review is resolved).'
+          '⚠️ WhatsApp is restricting this account (403/503/banned). Auto-restart is scheduled if the restriction persists.'
         )
+        if (!this.restrictedRestartTimer) {
+          this.restrictedRestartTimer = setTimeout(() => {
+            this.restrictedRestartTimer = null
+            if (this.shuttingDown || this.connected) return
+            logger.error(
+              { statusCode, delayMs: config.WHATSAPP_RESTRICTED_RESTART_MS },
+              'WhatsApp restriction persisted — exiting so systemd can restart the service'
+            )
+            process.exit(1)
+          }, config.WHATSAPP_RESTRICTED_RESTART_MS)
+        }
         return // Do NOT auto-reconnect — wait for manual intervention
       }
 
@@ -762,6 +814,10 @@ export class WhatsAppClient {
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer)
         this.reconnectTimer = null
+      }
+      if (this.restrictedRestartTimer) {
+        clearTimeout(this.restrictedRestartTimer)
+        this.restrictedRestartTimer = null
       }
       logger.info('✅ WhatsApp connected successfully!')
       // Refresh the set of bot LIDs (needed to detect @mentions in groups).

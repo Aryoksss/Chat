@@ -88,6 +88,8 @@ export const config = {
   HUTAO_AUTO_VOICE_CHANCE: Math.max(0, Math.min(1, numberEnv('HUTAO_AUTO_VOICE_CHANCE', 0.18))),
   HUTAO_AUTO_VOICE_COOLDOWN_MS: Math.max(0, numberEnv('HUTAO_AUTO_VOICE_COOLDOWN_MS', 10 * 60 * 1000)),
   HUTAO_AUTO_VOICE_MAX_CHARS: Math.max(40, numberEnv('HUTAO_AUTO_VOICE_MAX_CHARS', 240)),
+  // Restart process jika pembatasan WhatsApp 403/503 bertahan terlalu lama.
+  WHATSAPP_RESTRICTED_RESTART_MS: Math.max(60_000, numberEnv('WHATSAPP_RESTRICTED_RESTART_MS', 10 * 60 * 1000)),
 
   // === Owner finance ledger + Gmail transaction import ===
   FINANCE_ENABLED: booleanEnv('FINANCE_ENABLED', false),

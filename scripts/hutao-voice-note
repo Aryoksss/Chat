@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 ROOT="${HUTAO_RVC_ROOT:-$PROJECT_ROOT/data/hutao-rvc}"
 PYTHON="$ROOT/.venv/bin/python"
+if [[ ! -x "$PYTHON" ]]; then
+  PYTHON="$ROOT/.venv-fallback/bin/python"
+fi
 MODEL="$ROOT/models/extracted/hutao-jp/hutao-jp.pth"
 INDEX="$ROOT/models/extracted/hutao-jp/added_IVF1662_Flat_nprobe_1.index"
 TEXT=""
@@ -26,7 +29,7 @@ if [[ -z "$TEXT" || -z "$OUTPUT" ]]; then
   echo "--text and --output are required" >&2
   exit 2
 fi
-if [[ ! -x "$PYTHON" || ! -f "$MODEL" || ! -f "$INDEX" ]]; then
+if [[ ! -x "$PYTHON" ]]; then
   echo "Hu Tao RVC runtime/model is not installed in $ROOT" >&2
   exit 1
 fi
@@ -36,8 +39,22 @@ trap 'rm -rf -- "$WORK_DIR"' EXIT
 
 "$PYTHON" -m edge_tts --voice ja-JP-NanamiNeural --rate=+4% --pitch=+6Hz \
   --text "$TEXT" --write-media "$WORK_DIR/base.mp3"
+
+# The large RVC model may be unavailable during VPS migration. Still return a
+# real voice note using the generated TTS audio instead of leaking protocol
+# markers or falling back to visible text.
+if [[ ! -f "$MODEL" || ! -f "$INDEX" ]]; then
+  ffmpeg -hide_banner -loglevel error -y -i "$WORK_DIR/base.mp3" \
+    -c:a libopus -b:a 48k -application voip "$OUTPUT"
+  exit 0
+fi
+
 ffmpeg -hide_banner -loglevel error -y -i "$WORK_DIR/base.mp3" \
   -ar 40000 -ac 1 "$WORK_DIR/base.wav"
+
+# The trusted Hu Tao/fairseq checkpoint predates PyTorch's weights_only default.
+# Keep the compatibility override scoped to this one RVC child process.
+export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 
 "$PYTHON" -m rvc_python cli \
   -i "$WORK_DIR/base.wav" \
