@@ -87,7 +87,7 @@ export class CommandHandler {
     return true
   }
 
-  /** /menu — send ONLY the interactive dropdown list (WA developer style) */
+  /** /menu — send the interactive dropdown category menu. */
   private async cmdMenu(msg: IncomingMessage, client: WhatsAppClient): Promise<boolean> {
     const prefix = config.PREFIX
     const sections = this.buildMenuCategorySections(prefix, !msg.isGroup, msg.isGroup)
@@ -169,7 +169,7 @@ export class CommandHandler {
       sections,
     )
     if (!sent) {
-      const rows = detail.rows.map(row => `• ${row.rowId}`).join('\n')
+      const rows = detail.rows.map(row => `• ${row.title}: ${row.rowId}`).join('\n')
       await client.sendText(msg.jid, `${selected.title}\n\n${rows}\n\nKembali: ${prefix}menu`, msg.raw)
     }
     return true
@@ -269,7 +269,9 @@ export class CommandHandler {
     const sections = new Map<string, Array<{ title: string; description?: string; rowId: string }>>()
 
     for (const tool of toolDefinitions) {
-      if (tool.name === 'reminder' && !includeOwnerCommands) continue
+      // Reminder is available to the owner in DM and to everyone in groups.
+      // Keep it out of ordinary non-owner private chats.
+      if (tool.name === 'reminder' && !includeOwnerCommands && !includeGroupCommands) continue
       const meta = this.getToolMenuMeta(tool.name, prefix)
       if (!meta) continue
 
@@ -288,8 +290,8 @@ export class CommandHandler {
       { title: 'Job Media', description: 'Lihat proses media yang aktif', rowId: `${prefix}jobs` },
       { title: 'Batalkan Job', description: 'Batalkan dengan ID job', rowId: `${prefix}cancel` },
     )
-    if (includeOwnerCommands) {
-      utilityRows.splice(1, 0, { title: 'Pengingat Aktif', description: 'Lihat pengingat owner', rowId: `${prefix}reminders` })
+    if (includeOwnerCommands || includeGroupCommands) {
+      utilityRows.splice(1, 0, { title: 'Pengingat Aktif', description: 'Lihat pengingat chat', rowId: `${prefix}reminders` })
     }
     sections.set('Utility', utilityRows)
 
@@ -412,6 +414,8 @@ export class CommandHandler {
         return { section: 'Media', title: 'Twitter/X', command: `${prefix}tw <url>` }
       case 'threads-dl':
         return { section: 'Media', title: 'Threads', command: `${prefix}th <url>` }
+      case 'pinterest-search':
+        return { section: 'Media', title: 'Cari Foto Pinterest', command: `${prefix}pin <kata kunci>` }
       case 'brainly':
         return { section: 'AI & Search', title: 'Brainly', command: `${prefix}brainly <soal>` }
       case 'web-search':

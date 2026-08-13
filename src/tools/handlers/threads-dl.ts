@@ -39,7 +39,12 @@ export function extractThreadsMeta(html: string, property: string): string | nul
   const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const match = html.match(new RegExp(`<meta[^>]*?(?:property|name)=["']${escaped}["'][^>]*?content=["']([^"']+)["']`, 'i'))
     || html.match(new RegExp(`<meta[^>]*?content=["']([^"']+)["'][^>]*?(?:property|name)=["']${escaped}["']`, 'i'))
-  return match?.[1]?.replace(/&amp;/g, '&').replace(/&#x27;/gi, "'").replace(/&quot;/g, '"') || null
+  return match?.[1]
+    ?.replace(/&amp;/g, '&')
+    .replace(/&#x27;|&#39;/gi, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, decimal: string) => String.fromCodePoint(Number(decimal))) || null
 }
 
 function isAllowedMediaUrl(value: string): boolean {
@@ -104,6 +109,37 @@ async function downloadFromPublicResolver(url: string): Promise<{
   if (!media?.url) return null
 
   return downloadMediaUrl(media.url, media.type === 'video' || payload.type === 'video' ? 'video' : 'image')
+}
+
+/**
+ * Threads share links redirect to a post URL in the browser, but some public
+ * resolvers reject the /share/... form. Resolve the canonical URL first so a
+ * video resolver can return the MP4 instead of the page's cover image.
+ */
+async function resolveCanonicalThreadsUrl(url: string): Promise<string> {
+  try {
+    const response = await fetch(url, { headers: PUBLIC_HEADERS, signal: AbortSignal.timeout(20_000) })
+    if (response.ok) {
+      const html = await response.text()
+      const canonical = extractThreadsMeta(html, 'og:url') || extractThreadsMeta(html, 'twitter:url')
+      if (canonical && isThreadsUrl(canonical)) return canonical
+    }
+  } catch {
+    // Try curl below; Threads may serve a client shell to Node's fetch.
+  }
+
+  try {
+    const curl = await execFileP('curl', [
+      '-L', '--fail', '--silent', '--show-error',
+      '-A', 'Mozilla/5.0',
+      url,
+    ], { timeout: 30_000, maxBuffer: 8 * 1024 * 1024 })
+    const canonical = extractThreadsMeta(curl.stdout, 'og:url') || extractThreadsMeta(curl.stdout, 'twitter:url')
+    if (canonical && isThreadsUrl(canonical)) return canonical
+  } catch (err) {
+    logger.debug({ error: err instanceof Error ? err.message : String(err) }, 'Threads canonical URL curl fallback failed')
+  }
+  return url
 }
 
 async function downloadFromPageMetadata(url: string): Promise<{
@@ -182,8 +218,11 @@ export async function handleThreadsDownload(args: ThreadsArgs): Promise<{
       logger.warn({ error: ytErr instanceof Error ? ytErr.message : String(ytErr) }, 'yt-dlp Threads extractor unavailable; trying page metadata')
     }
 
+    const resolverUrl = await resolveCanonicalThreadsUrl(url)
+    if (resolverUrl !== url) logger.info({ from: url, to: resolverUrl }, 'Resolved canonical Threads URL')
+
     try {
-      result ||= await downloadFromPublicResolver(url)
+      result ||= await downloadFromPublicResolver(resolverUrl)
     } catch (resolverErr) {
       logger.warn({ error: resolverErr instanceof Error ? resolverErr.message : String(resolverErr) },
         'Public Threads resolver unavailable; trying page metadata')
@@ -192,7 +231,7 @@ export async function handleThreadsDownload(args: ThreadsArgs): Promise<{
     if (!result) throw new Error('Media tidak ditemukan. Post mungkin private atau formatnya belum didukung')
 
     const { filePath, fileType } = result
-    logger.info({ filePath }, 'Threads media downloaded')
+    logger.info({ filePath, fileType }, 'Threads media downloaded')
     return {
       success: true,
       filePath,

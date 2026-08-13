@@ -52,7 +52,7 @@ async function main() {
 
   // 6. Connect
   await client.start()
-  reminderManager.start(client)
+  reminderManager.start(client, () => messageHandler.getPersonas().get('group'))
   financeManager.start(client)
   ownerGreetingManager.start(client, personas.get('owner'))
 

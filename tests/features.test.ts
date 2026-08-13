@@ -11,15 +11,70 @@ import { parseFourkhdSearchIntent } from '../src/tools/handlers/fourkhd.js'
 import { handleSmeme } from '../src/tools/handlers/smeme.js'
 import { decideAutoVoice, prepareVoiceText } from '../src/audio/auto-voice.js'
 import { normalizeForHuTaoVoice, numberToIndonesian } from '../src/audio/text-normalizer.js'
-import { isThreadsUrl } from '../src/tools/handlers/threads-dl.js'
-import { handleReminder } from '../src/tools/handlers/reminder.js'
+import { extractThreadsMeta, isThreadsUrl } from '../src/tools/handlers/threads-dl.js'
+import { extractStickerMediaMessage } from '../src/tools/handlers/sticker.js'
+import { extractReminderMentions, handleReminder, isReminderAllowedContext } from '../src/tools/handlers/reminder.js'
 import { ownerGreetingSchedule } from '../src/greetings/manager.js'
+import { extractPinterestMedia, isPinterestMediaUrl, pinterestSearchUrl } from '../src/tools/handlers/pinterest-search.js'
+import { config } from '../src/system/config.js'
+import { aiBridge } from '../src/core/ai.js'
 
 test('Threads downloader accepts only HTTPS Threads URLs', () => {
   assert.equal(isThreadsUrl('https://www.threads.com/@z33ven/post/DbgbbgYAWSF/media'), true)
   assert.equal(isThreadsUrl('https://threads.net/@user/post/123'), true)
   assert.equal(isThreadsUrl('http://www.threads.com/@user/post/123'), false)
   assert.equal(isThreadsUrl('https://example.com/@user/post/123'), false)
+})
+
+test('Threads metadata decodes canonical post URLs from share pages', () => {
+  const html = '<meta property="og:url" content="https://www.threads.com/&#064;user/post/123">'
+  assert.equal(extractThreadsMeta(html, 'og:url'), 'https://www.threads.com/@user/post/123')
+})
+
+test('sticker reply can extract media nested inside a carousel card', () => {
+  const raw = {
+    key: { remoteJid: 'chat@s.whatsapp.net' },
+    message: {
+      extendedTextMessage: {
+        contextInfo: {
+          stanzaId: 'carousel-message-id',
+          quotedMessage: {
+            interactiveMessage: {
+              carouselMessage: {
+                cards: [{ header: { videoMessage: { url: '/media/video.mp4', mediaKey: 'key' } } }],
+              },
+            },
+          },
+        },
+      },
+    },
+  }
+  const extracted = extractStickerMediaMessage(raw)
+  assert.equal(extracted?.key.fromMe, true)
+  assert.equal(extracted?.key.id, 'carousel-message-id')
+  assert.equal(extracted?.message.videoMessage.mediaKey, 'key')
+})
+
+test('Pinterest search only accepts Pin media and builds Pin source links', () => {
+  assert.equal(isPinterestMediaUrl('https://i.pinimg.com/originals/aa/bb/image.jpg'), true)
+  assert.equal(isPinterestMediaUrl('https://example.com/image.jpg'), false)
+
+  const hits = extractPinterestMedia([
+    {
+      id: '123456789',
+      title: 'Kucing lucu',
+      images: { orig: { url: 'https://i.pinimg.com/originals/aa/bb/cat.jpg' } },
+    },
+    {
+      id: '987654321',
+      videos: { V_HLSV4: { url: 'https://v1.pinimg.com/videos/mc/720p/cat.mp4' } },
+      images: { orig: { url: 'https://example.com/not-pinterest.jpg' } },
+    },
+  ])
+  assert.equal(hits.length, 2)
+  assert.equal(hits[0].pageUrl, 'https://www.pinterest.com/pin/123456789/')
+  assert.equal(hits[1].mediaType, 'video')
+  assert.match(pinterestSearchUrl('kucing lucu'), /BaseSearchResource\/get/)
 })
 
 test('reminder parser understands relative, daily, and weekly Indonesian time', () => {
@@ -38,13 +93,56 @@ test('reminder parser understands relative, daily, and weekly Indonesian time', 
   assert.equal(weekly?.recurrence, 'weekly:5')
 })
 
-test('reminder tool rejects group contexts', async () => {
+test('reminder tool keeps non-owner private chats blocked', async () => {
   const result = await handleReminder(
     { request: 'ingatkan aku 10 menit lagi minum obat' },
-    { jid: 'group@g.us', participant: 'member@lid', sock: {} },
+    { jid: '999999999@s.whatsapp.net', sock: {} },
   )
   assert.equal(result.success, false)
   assert.match(result.error || '', /owner/i)
+})
+
+test('group reminders allow every member and preserve tagged JIDs', () => {
+  const owner = config.OWNER_LID || config.OWNER_NUMBER
+  assert.equal(isReminderAllowedContext({ jid: 'group@g.us', participant: '123456789@lid', rawMessage: {} }), true)
+  assert.equal(isReminderAllowedContext({ jid: 'group@g.us', rawMessage: {} }), false)
+  assert.equal(isReminderAllowedContext({ jid: `${owner}@s.whatsapp.net`, rawMessage: {} }), true)
+  assert.equal(isReminderAllowedContext({ jid: '999999999@s.whatsapp.net', rawMessage: {} }), false)
+
+  const raw = {
+    message: {
+      extendedTextMessage: {
+        contextInfo: {
+          mentionedJid: ['111@s.whatsapp.net', '222@lid', '111@s.whatsapp.net'],
+        },
+      },
+    },
+  }
+  assert.deepEqual(extractReminderMentions(raw), ['111@s.whatsapp.net', '222@lid'])
+  assert.deepEqual(extractReminderMentions(raw, ['222@lid']), ['111@s.whatsapp.net'])
+})
+
+test('group reminder wording receives the active group persona', async () => {
+  const originalChat = (aiBridge as any).chat
+  let systemPrompt = ''
+  try {
+    (aiBridge as any).chat = async ({ messages }: any) => {
+      systemPrompt = messages[0]?.content || ''
+      return { content: 'Waktunya main, gas!', toolCalls: [] }
+    }
+    const text = await aiBridge.composeReminderMessage('main bareng', true, {
+      name: 'group',
+      identity: 'PERSONA_GRUP_UNIK',
+      soul: 'Santai dan kocak.',
+      agent: 'Teman ngobrol grup.',
+      tools: [],
+    })
+    assert.equal(text, 'Waktunya main, gas!')
+    assert.match(systemPrompt, /PERSONA_GRUP_UNIK/)
+    assert.match(systemPrompt, /Santai dan kocak/)
+  } finally {
+    (aiBridge as any).chat = originalChat
+  }
 })
 
 test('owner greeting schedule adapts between weekdays and weekends', () => {
@@ -120,7 +218,9 @@ test('media jobs and reminders can only be cancelled by their creator', () => {
     assert.equal(db.cancelMediaJobs('group@g.us', 'bob', job.id), 0)
     assert.equal(db.cancelMediaJobs('group@g.us', 'alice', job.id), 1)
 
-    const reminder = db.createReminder('group@g.us', 'alice', 'rapat', Date.now() + 60_000)
+    const reminder = db.createReminder('group@g.us', 'alice', 'rapat', Date.now() + 60_000, '', ['111@s.whatsapp.net', '222@lid'])
+    assert.deepEqual(reminder.mentions, ['111@s.whatsapp.net', '222@lid'])
+    assert.deepEqual(db.listReminders('group@g.us')[0].mentions, ['111@s.whatsapp.net', '222@lid'])
     assert.equal(db.cancelReminder('group@g.us', 'bob', reminder.id), 0)
     assert.equal(db.cancelReminder('group@g.us', 'alice', reminder.id), 1)
   } finally {

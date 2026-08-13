@@ -43,6 +43,7 @@ export interface ReminderRecord {
   task: string
   dueAt: number
   recurrence?: string
+  mentions: string[]
   status: 'active' | 'processing' | 'done' | 'cancelled'
   createdAt: number
 }
@@ -112,6 +113,7 @@ export class BotDatabase {
         task TEXT NOT NULL,
         due_at INTEGER NOT NULL,
         recurrence TEXT NOT NULL DEFAULT '',
+        mentions TEXT NOT NULL DEFAULT '[]',
         status TEXT NOT NULL DEFAULT 'active',
         created_at INTEGER NOT NULL,
         last_sent_at INTEGER
@@ -189,6 +191,11 @@ export class BotDatabase {
       .map(row => rowValue<string>(row, 'name'))
     if (!memberColumns.includes('custom_name')) {
       this.db.exec(`ALTER TABLE group_members ADD COLUMN custom_name TEXT NOT NULL DEFAULT ''`)
+    }
+    const reminderColumns = this.db.prepare('PRAGMA table_info(reminders)').all()
+      .map(row => rowValue<string>(row, 'name'))
+    if (!reminderColumns.includes('mentions')) {
+      this.db.exec(`ALTER TABLE reminders ADD COLUMN mentions TEXT NOT NULL DEFAULT '[]'`)
     }
     const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000
     this.db.prepare('DELETE FROM outgoing_messages WHERE created_at < ?').run(cutoff)
@@ -318,12 +325,15 @@ export class BotDatabase {
     }))
   }
 
-  createReminder(jid: string, sender: string, task: string, dueAt: number, recurrence = ''): ReminderRecord {
+  createReminder(jid: string, sender: string, task: string, dueAt: number, recurrence = '', mentions: string[] = []): ReminderRecord {
     const id = randomUUID().replace(/-/g, '').slice(0, 8)
     const now = Date.now()
-    this.db.prepare(`INSERT INTO reminders(id,jid,sender,task,due_at,recurrence,status,created_at) VALUES(?,?,?,?,?,?,'active',?)`)
-      .run(id, jid, sender, task, dueAt, recurrence, now)
-    return { id, jid, sender, task, dueAt, recurrence: recurrence || undefined, status: 'active', createdAt: now }
+    const normalizedMentions = Array.from(new Set(mentions
+      .map(value => String(value).trim())
+      .filter(value => value.includes('@')))).slice(0, 20)
+    this.db.prepare(`INSERT INTO reminders(id,jid,sender,task,due_at,recurrence,mentions,status,created_at) VALUES(?,?,?,?,?,?,?,'active',?)`)
+      .run(id, jid, sender, task, dueAt, recurrence, JSON.stringify(normalizedMentions), now)
+    return { id, jid, sender, task, dueAt, recurrence: recurrence || undefined, mentions: normalizedMentions, status: 'active', createdAt: now }
   }
 
   listReminders(jid: string, limit = 20): ReminderRecord[] {
@@ -608,10 +618,18 @@ export class BotDatabase {
   }
 
   private mapReminder(row: unknown): ReminderRecord {
+    let mentions: string[] = []
+    try {
+      const parsed = JSON.parse(rowValue<string>(row, 'mentions') || '[]')
+      if (Array.isArray(parsed)) mentions = parsed.filter(value => typeof value === 'string')
+    } catch {
+      // Older/corrupt rows should remain usable without breaking the scheduler.
+    }
     return {
       id: rowValue<string>(row, 'id'), jid: rowValue<string>(row, 'jid'), sender: rowValue<string>(row, 'sender'),
       task: rowValue<string>(row, 'task'), dueAt: Number(rowValue<number>(row, 'due_at')),
       recurrence: rowValue<string>(row, 'recurrence') || undefined,
+      mentions,
       status: rowValue<ReminderRecord['status']>(row, 'status'), createdAt: Number(rowValue<number>(row, 'created_at')),
     }
   }
