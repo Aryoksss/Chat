@@ -29,6 +29,37 @@ test('private main menu shows owner category but not group category', () => {
   assert.equal(rows.some((row: any) => row.rowId === '.menu-group'), false)
 })
 
+test('main menu is delivered as a dropdown with group-safe categories', async () => {
+  const handler = new CommandHandler()
+  let listSections: any[] = []
+  let textCalls = 0
+  const client = {
+    sendListMenu: async (_jid: string, _title: string, _text: string, _footer: string, _button: string, sections: any[]) => {
+      listSections = sections
+      return true
+    },
+    sendText: async () => { textCalls++ },
+  }
+  const handled = await handler.handle({
+    jid: 'group@g.us',
+    sender: 'someone',
+    text: '.menu',
+    messageType: 'text',
+    hasMedia: false,
+    isGroup: true,
+    isBotMentioned: false,
+    isReplyToBot: false,
+    raw: {},
+  } as any, client as any)
+
+  const rows = listSections.flatMap((section: any) => section.rows)
+  assert.equal(handled, true)
+  assert.ok(rows.some((row: any) => row.rowId === '.menu-media'))
+  assert.ok(rows.some((row: any) => row.rowId === '.menu-group'))
+  assert.equal(rows.some((row: any) => row.rowId === '.menu-finance'), false)
+  assert.equal(textCalls, 0)
+})
+
 test('AI helper is delivered as a dropdown menu', async () => {
   const handler = new CommandHandler()
   let listCalls = 0
@@ -64,8 +95,8 @@ test('group menu excludes owner commands and private pap tool', () => {
   assert.equal(rows.some((row: any) => row.rowId.includes('pap')), false)
   assert.equal(rows.some((row: any) => row.rowId.includes('keuangan')), false)
   assert.ok(rows.some((row: any) => row.rowId === '!jobs'))
-  assert.equal(rows.some((row: any) => row.rowId === '!reminders'), false)
-  assert.equal(rows.some((row: any) => row.rowId === '!reminder'), false)
+  assert.ok(rows.some((row: any) => row.rowId === '!reminders'))
+  assert.ok(rows.some((row: any) => row.rowId === '!reminder'))
   assert.ok(rows.some((row: any) => row.rowId === '!anggota'))
 })
 

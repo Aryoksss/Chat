@@ -21,6 +21,8 @@ import { handleAnimeDlSearch, handleAnimeLinks } from './handlers/anime-dl.js'
 import { handlePap } from './handlers/pap.js'
 import { handleReminder } from './handlers/reminder.js'
 import { handleFinance } from './handlers/finance.js'
+import { handleMemeSearch } from './handlers/meme-search.js'
+import { handlePinterestSearch } from './handlers/pinterest-search.js'
 
 export function registerAllTools() {
   const tools = [
@@ -35,10 +37,12 @@ export function registerAllTools() {
     { name: 'brainly', desc: 'Cari jawaban soal pelajaran/PR dari Brainly (HANYA untuk soal sekolah)', params: { query: { type: 'string' } }, handler: handleBrainly },
     { name: 'qr', desc: 'Bikin QR code', params: { text: { type: 'string' } }, handler: handleQrGenerate },
     { name: 'img-gen', desc: 'Generate gambar baru dari prompt, atau EDIT gambar yang dikirim/di-reply (FLUX AI). Default realistic; anti-anime kecuali user minta anime.', params: { prompt: { type: 'string' } }, handler: handleImageGen },
+    { name: 'meme-search', desc: 'Cari meme/gambar/GIF yang sudah ada dari internet selain Pinterest, lalu kirim beberapa hasil sebagai album. Jangan membuat gambar baru.', params: { query: { type: 'string' }, maxResults: { type: 'number' } }, handler: handleMemeSearch },
+    { name: 'pinterest-search', desc: 'Cari foto, GIF, atau video yang sudah ada khusus dari Pinterest, lalu kirim maksimal 4 hasil sebagai carousel horizontal dengan link Pin. Jangan mengambil sumber lain dan jangan membuat gambar baru.', params: { query: { type: 'string' }, maxResults: { type: 'number' } }, handler: handlePinterestSearch },
     { name: 'translate', desc: 'Translate teks', params: { text: { type: 'string' }, to: { type: 'string' } }, handler: handleTranslate },
     { name: 'shortlink', desc: 'Pendekin URL', params: { url: { type: 'string' } }, handler: handleShortlink },
     { name: 'weather', desc: 'Cek cuaca', params: { city: { type: 'string' } }, handler: handleWeather },
-    { name: 'reminder', desc: 'KHUSUS OWNER DM. Buat alarm/pengingat sekali atau berulang. Pesan saat jatuh tempo akan disusun AI secara bervariasi.', params: { request: { type: 'string', description: 'Kalimat lengkap, contoh: ingatkan saya besok jam 8 bayar listrik' }, task: { type: 'string' }, when: { type: 'string' } }, handler: handleReminder },
+    { name: 'reminder', desc: 'Buat alarm/pengingat sekali atau berulang. Di grup dapat dipakai semua anggota, memakai persona grup, dan akan mention anggota yang ditag saat jatuh tempo. Di chat pribadi hanya tersedia untuk owner.', params: { request: { type: 'string', description: 'Kalimat lengkap, contoh: ingatkan saya besok jam 8 bayar listrik' }, task: { type: 'string' }, when: { type: 'string' } }, handler: handleReminder },
     { name: 'finance', desc: 'KHUSUS OWNER DM. Catat, edit, rangkum, daftar, konfirmasi, export, sinkronkan Gmail, atau perbarui Google Sheets untuk transaksi keuangan pribadi. Saat meninjau pending, jangan konfirmasi notifikasi non-transaksi/nominal 0. Untuk pending_duplicate, cek pasangan: jika pasangan sudah confirmed, abaikan kandidat agar tidak menggandakan ledger; jika belum jelas, pilih gabungkan atau simpan terpisah.', params: {
       action: { type: 'string', enum: ['record', 'summary', 'list', 'pending', 'confirm', 'update', 'export', 'sync', 'sheets'] },
       request: { type: 'string', description: 'Teks transaksi/perubahan, atau YYYY-MM-DD untuk sync' },

@@ -50,17 +50,69 @@ export class ToolExecutor {
       if (result.success) {
         let sendFailed = false
         if (result.filePaths && result.filePaths.length > 0) {
-          // Multi-file result — send each file via socket
+          // Baileys fork supports native album messages for multiple images.
+          // Keep the old sequential behavior for tools that do not opt in.
           try {
-            for (const fp of result.filePaths) {
+            if (result.sendAsCarousel && result.filePaths.length >= 2 && (result.fileType === 'image' || result.fileType === 'video')) {
+              try {
+                const sent = await context.sock.sendMessage(context.jid, {
+                  text: result.text || '🖼️ Hasil pencarian',
+                  footer: 'Geser untuk melihat hasil lainnya',
+                  cards: result.filePaths.map((fp, index) => {
+                    const mediaType = result.fileTypes?.[index] || result.fileType || 'image'
+                    return {
+                      [mediaType]: {
+                        url: fp,
+                        ...(mediaType === 'video' && result.fileAnimations?.[index] ? { gifPlayback: true } : {}),
+                      },
+                      caption: result.albumCaptions?.[index] || `Hasil ${index + 1}`,
+                      // This Baileys fork expects nativeFlow to exist even
+                      // when a card has no action buttons.
+                      nativeFlow: [],
+                    }
+                  }),
+                }, context.rawMessage ? { quoted: context.rawMessage } : undefined)
+                if (sent?.key?.id) botDatabase.rememberOutgoing(context.jid, sent.key.id, 'image')
+              } catch (carouselErr) {
+                // Some WhatsApp clients reject a native carousel when one card
+                // has an unsupported media format. Do not lose the search result:
+                // fall back to ordinary media messages instead.
+                logger.warn({ error: this.describeError(carouselErr) }, 'Carousel rejected; falling back to individual media')
+                const intro = await context.sock.sendMessage(context.jid, {
+                  text: result.text || '🖼️ Hasil pencarian',
+                }, context.rawMessage ? { quoted: context.rawMessage } : undefined)
+                if (intro?.key?.id) botDatabase.rememberOutgoing(context.jid, intro.key.id, 'text')
+                for (const [index, fp] of result.filePaths.entries()) {
+                  const mediaType = result.fileTypes?.[index] || result.fileType || 'image'
+                  const sent = await context.sock.sendMessage(context.jid, {
+                    [mediaType]: {
+                      url: fp,
+                      ...(mediaType === 'video' && result.fileAnimations?.[index] ? { gifPlayback: true } : {}),
+                    },
+                    ...(result.albumCaptions?.[index] ? { caption: result.albumCaptions[index] } : {}),
+                  }, context.rawMessage ? { quoted: context.rawMessage } : undefined)
+                  if (sent?.key?.id) botDatabase.rememberOutgoing(context.jid, sent.key.id, mediaType)
+                }
+              }
+            } else if (result.sendAsAlbum && result.fileType === 'image' && result.filePaths.length >= 2) {
               const sent = await context.sock.sendMessage(context.jid, {
-                [result.fileType || 'document']: { url: fp },
+                album: result.filePaths.map((fp, index) => ({
+                  image: { url: fp },
+                  ...(result.albumCaptions?.[index] ? { caption: result.albumCaptions[index] } : {}),
+                })),
               }, context.rawMessage ? { quoted: context.rawMessage } : undefined)
-              if (sent?.key?.id) botDatabase.rememberOutgoing(context.jid, sent.key.id, result.fileType || 'document')
+              if (sent?.key?.id) botDatabase.rememberOutgoing(context.jid, sent.key.id, 'image')
+            } else {
+              for (const fp of result.filePaths) {
+                const sent = await context.sock.sendMessage(context.jid, {
+                  [result.fileType || 'document']: { url: fp },
+                }, context.rawMessage ? { quoted: context.rawMessage } : undefined)
+                if (sent?.key?.id) botDatabase.rememberOutgoing(context.jid, sent.key.id, result.fileType || 'document')
+              }
             }
           } catch (sendErr) {
             sendFailed = true
-            logger.error({ sendErr }, 'Failed to send tool result files')
+            logger.error({ error: this.describeError(sendErr) }, 'Failed to send tool result files')
           } finally {
             await Promise.all(result.filePaths.map(filePath => this.cleanupTempFile(filePath)))
           }
@@ -84,7 +136,7 @@ export class ToolExecutor {
             }
           } catch (sendErr) {
             sendFailed = true
-            logger.error({ sendErr }, 'Failed to send tool result file')
+            logger.error({ error: this.describeError(sendErr) }, 'Failed to send tool result file')
           } finally {
             await this.cleanupTempFile(result.filePath)
           }
@@ -119,6 +171,13 @@ export class ToolExecutor {
     } finally {
       if (mediaJob) context.mediaJobId = undefined
     }
+  }
+
+  private describeError(error: unknown): { name?: string; message: string; stack?: string } {
+    if (error instanceof Error) {
+      return { name: error.name, message: error.message, stack: error.stack }
+    }
+    return { message: typeof error === 'string' ? error : JSON.stringify(error) }
   }
 
   /** Wraps all registered tools into Map for AI tool calling loop */

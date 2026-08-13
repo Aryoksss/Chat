@@ -58,6 +58,18 @@ Description: Generate gambar baru dari prompt, atau EDIT gambar yang dikirim/di-
 Parameters:
 - prompt (string, required) — Deskripsi gambar baru, atau instruksi edit kalau user reply/kirim foto (misal "ubah jadi kartun")
 
+## meme-search
+Description: Cari meme, meme trending, atau GIF yang sudah ada dari internet selain Pinterest dan kirim beberapa hasil sebagai album. Jangan membuat gambar baru.
+Parameters:
+- query (string, required) — Kata kunci meme yang dicari
+- maxResults (number, optional) — Jumlah gambar, default 6
+
+## pinterest-search
+Description: Cari foto, GIF, atau video yang sudah ada khusus dari Pinterest dan kirim maksimal 4 hasil sebagai carousel horizontal dengan link Pin. Jangan mengambil sumber lain dan jangan membuat gambar baru.
+Parameters:
+- query (string, required) — Kata kunci pencarian Pinterest
+- maxResults (number, optional) — Jumlah hasil, maksimal 4
+
 ## translate
 Description: Translate teks ke bahasa lain.
 Parameters:
@@ -75,7 +87,7 @@ Parameters:
 - city (string, required) — Nama kota yang mau dicek cuacanya
 
 ## reminder
-Description: KHUSUS OWNER DM. Membuat alarm/pengingat sekali atau berulang; pesan saat waktunya tiba disusun AI secara bervariasi. Jangan panggil dari grup atau chat non-owner.
+Description: KHUSUS OWNER DM. Membuat alarm/pengingat sekali atau berulang di chat pribadi; pesan saat waktunya tiba disusun AI secara bervariasi. Reminder grup ditangani oleh persona grup dan dapat dipakai semua anggota.
 Parameters:
 - request (string, required) — Kalimat lengkap permintaan pengingat
 - task (string, optional) — Hal yang perlu diingatkan

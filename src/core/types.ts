@@ -24,6 +24,7 @@ export interface ToolContext {
   jid: string              // Chat JID (sender or group)
   participant?: string     // Participant who sent message (null in DM)
   downloadMedia?: (msg: any) => Promise<Buffer | null>
+  getMessage?: (key: any) => Promise<any | null>
   rawMessage?: any         // Raw Baileys message object
   rawMessages?: any[]      // Album/batch media messages
   suppressTextResponse?: boolean // Tool already sent the final media response
@@ -36,7 +37,12 @@ export interface ToolResult {
   text?: string           // Text response for AI
   filePath?: string       // Path to file to send (sticker, download, etc.)
   filePaths?: string[]    // Multiple files to send in one call (e.g. photo gallery)
+  sendAsAlbum?: boolean    // Send multiple image files as one Baileys album
+  sendAsCarousel?: boolean // Send multiple image files as a horizontal cards carousel
+  albumCaptions?: string[]
   fileType?: 'sticker' | 'document' | 'video' | 'audio' | 'image'
+  fileTypes?: Array<'video' | 'image'>
+  fileAnimations?: boolean[] // Mark video files that should be displayed as animated GIFs
   isAnimated?: boolean    // Required by WhatsApp for animated WebP stickers
   caption?: string        // Caption for the file
   preserveTextResponse?: boolean // Keep text response after sending a file (e.g. finance report)
