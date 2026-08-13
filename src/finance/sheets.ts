@@ -3,6 +3,7 @@ import { GmailReadOnlyClient } from './gmail.js'
 import type { FinanceTransactionRecord } from './types.js'
 
 const SHEETS_API = 'https://sheets.googleapis.com/v4'
+const SHEETS_REQUEST_TIMEOUT_MS = 120_000
 const DASHBOARD_SHEET = 'Dashboard'
 const REVIEW_SHEET = 'Perlu Ditinjau'
 const SYSTEM_SHEET = 'Data_System'
@@ -634,22 +635,27 @@ export class FinanceSheetsClient {
   }
 
   private async api<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
-    const token = await this.auth.getGoogleAccessToken()
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const response = await fetch(`${SHEETS_API}${path}`, {
-        ...init,
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(init.headers || {}) },
-        signal: AbortSignal.timeout(30_000),
-      })
-      if (response.ok) {
-        if (response.status === 204) return undefined as T
-        return response.json() as Promise<T>
+      try {
+        const token = await this.auth.getGoogleAccessToken()
+        const response = await fetch(`${SHEETS_API}${path}`, {
+          ...init,
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(init.headers || {}) },
+          signal: AbortSignal.timeout(SHEETS_REQUEST_TIMEOUT_MS),
+        })
+        if (response.ok) {
+          if (response.status === 204) return undefined as T
+          return response.json() as Promise<T>
+        }
+        const detail = (await response.text()).slice(0, 300)
+        if (!isTransient(response.status) || attempt === 2) {
+          throw new Error(`Google Sheets API ${response.status}: ${detail}`)
+        }
+      } catch (error) {
+        if (attempt === 2) throw error
+        await sleep(750 * (attempt + 1))
       }
-      const detail = (await response.text()).slice(0, 300)
-      if (!isTransient(response.status) || attempt === 2) {
-        throw new Error(`Google Sheets API ${response.status}: ${detail}`)
-      }
-      await sleep(500 * (attempt + 1))
+      await sleep(750 * (attempt + 1))
     }
     throw new Error('Google Sheets API gagal setelah retry')
   }

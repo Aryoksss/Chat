@@ -97,6 +97,11 @@ export class FinanceCommandHandler {
     const parsed = commandParts(msg.text || '')
     const naturalId = isNaturalConfirmation(msg.text || '') ? quotedTransactionId(msg) : undefined
     if (!parsed && !naturalId) return false
+    if (parsed && !COMMANDS.has(parsed.command) && !naturalId) return false
+    // Finance is private-owner-only. Commands or natural confirmations seen in
+    // groups are consumed silently so no financial details or access-control
+    // messages leak into the group.
+    if (msg.isGroup) return true
     if (!isOwnerDm(msg)) {
       await client.sendText(msg.jid, '🔒 Fitur keuangan hanya tersedia di chat pribadi owner.', msg.raw)
       return true
@@ -104,7 +109,7 @@ export class FinanceCommandHandler {
 
     try {
       if (naturalId) return this.confirm(msg, client, naturalId)
-      if (!parsed || !COMMANDS.has(parsed.command)) return false
+      if (!parsed) return false
       if (parsed.command === 'catat') return this.record(msg, client, parsed.rest)
       if (parsed.command === 'laporan') return this.report(msg, client, parsed.rest)
       if (parsed.command === 'transaksi') {

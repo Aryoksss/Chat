@@ -46,9 +46,10 @@ async function main(): Promise<void> {
     }
   })
 
+  const requestedPort = Number(process.env.FINANCE_GMAIL_AUTH_PORT || 0)
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
+    server.listen(Number.isInteger(requestedPort) && requestedPort > 0 ? requestedPort : 0, '127.0.0.1', resolve)
   })
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('Gagal membuka callback OAuth lokal')

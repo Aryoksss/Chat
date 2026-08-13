@@ -336,7 +336,7 @@ test('interrupted finance imports become retryable after restart', () => {
   }
 })
 
-test('finance commands reject groups before touching private ledger', async () => {
+test('finance commands silently ignore groups before touching private ledger', async () => {
   const handler = new FinanceCommandHandler()
   const messages: string[] = []
   const handled = await handler.handle({
@@ -346,5 +346,18 @@ test('finance commands reject groups before touching private ledger', async () =
     sendText: async (_jid: string, text: string) => { messages.push(text); return true },
   } as any)
   assert.equal(handled, true)
-  assert.match(messages[0], /hanya tersedia di chat pribadi owner/i)
+  assert.equal(messages.length, 0)
+})
+
+test('finance guard does not swallow non-finance group commands', async () => {
+  const handler = new FinanceCommandHandler()
+  const messages: string[] = []
+  const handled = await handler.handle({
+    jid: 'group@g.us', sender: 'someone', text: '/s', messageType: 'text', hasMedia: false,
+    isGroup: true, isBotMentioned: true, isReplyToBot: true, raw: {},
+  } as any, {
+    sendText: async (_jid: string, text: string) => { messages.push(text); return true },
+  } as any)
+  assert.equal(handled, false)
+  assert.equal(messages.length, 0)
 })
